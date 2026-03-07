@@ -434,7 +434,9 @@ push_and_cleanup() {
           return 0
         fi
       else
-        echo "WARN: root tree dirty; skipping auto-merge for ${branch}" >>"${log}"
+        echo "WARN: root tree dirty; skipping auto-merge for ${branch}; keeping branch/worktree for manual merge" >>"${log}"
+        echo "WARN: root tree dirty; retained ${branch} at ${wt} for manual merge"
+        return 0
       fi
     fi
   fi
