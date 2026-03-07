@@ -63,6 +63,11 @@ def printUsage : IO Unit := do
   IO.println "                  Targets: core, flat, anf, wasmIR"
   IO.println "  --help          Show this help"
 
+def findOutputFile : List String → String
+  | "-o" :: path :: _ => path
+  | _ :: rest => findOutputFile rest
+  | [] => "output.wasm"
+
 def main (args : List String) : IO UInt32 := do
   if args.isEmpty || args.contains "--help" then
     printUsage
@@ -81,7 +86,7 @@ def main (args : List String) : IO UInt32 := do
   -- Check for --emit flag
   for arg in args do
     if arg.startsWith "--emit=" then
-      let target := arg.drop 7
+      let target := (arg.drop 7).toString
       match parseEmitTarget target with
       | some .core => do
         match Core.elaborate ast with
@@ -94,7 +99,7 @@ def main (args : List String) : IO UInt32 := do
   -- Check for --run flag
   for arg in args do
     if arg.startsWith "--run=" then
-      let target := arg.drop 6
+      let target := (arg.drop 6).toString
       match parseRunTarget target with
       | some .core => do
         match Core.elaborate ast with
@@ -112,10 +117,7 @@ def main (args : List String) : IO UInt32 := do
 
   -- Default: compile to wasm
   -- Find output file
-  let outputFile := if let some idx := args.indexOf? "-o" then
-    args.get? (idx.val + 1) |>.getD "output.wasm"
-  else
-    "output.wasm"
+  let outputFile := findOutputFile args
 
   IO.println s!"TODO: Full compilation pipeline to {outputFile}"
   return 0

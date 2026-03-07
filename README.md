@@ -1,7 +1,7 @@
 # VerifiedJS: A Formally Verified JavaScript-to-WebAssembly Compiler in Lean 4
 
 This file is the agent operating prompt (formerly `AGENT_PROMPT.md`).
-
+    
 ## Mission
 
 Build a formally verified compiler from **full JavaScript** (ECMAScript 2020) to WebAssembly, written entirely in Lean 4. The compiler's correctness—semantic preservation from source to target—is proved mechanically in Lean's type theory. The compiled output runs on any standard Wasm runtime. End-to-end behavior is validated against Node.js using Test262.
@@ -701,6 +701,7 @@ This means: `class` (SPEC §14.6), `async/await` (SPEC §14.7–14.8), generator
 ### Formalization Strategy
 
 Formalize incrementally:
+0. Implement parser/lexer end to end, make sure it runs on everything first.
 1. Computational core: primitives, let/const, functions, closures, objects, arrays, control flow (SPEC §6–8, §12–13)
 2. Classes, prototypes, `this` (SPEC §9, §14.6)
 3. Generators, async/await (SPEC §14.4, §14.7–14.8, §25.6)

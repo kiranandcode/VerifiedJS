@@ -34,6 +34,10 @@ fi
 if [[ "${STATUS}" -eq 0 ]]; then
   echo "lake build: PASS (errors=${ERROR_COUNT}, warnings=${WARNING_COUNT}) — log: ${LOG_FILE}"
 else
+  echo "--- errors (summary) ---"
+  printf "%s\n" "${OUTPUT}" | rg -i "error:|✖|build failed|failed" || true
+  echo "--- last 80 lines ---"
+  tail -n 80 "${LOG_FILE}" || true
   echo "lake build: FAIL (errors=${ERROR_COUNT}, warnings=${WARNING_COUNT}) — log: ${LOG_FILE}"
 fi
 
