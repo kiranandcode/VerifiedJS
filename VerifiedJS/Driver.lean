@@ -57,6 +57,7 @@ def printUsage : IO Unit := do
   IO.println ""
   IO.println "Options:"
   IO.println "  -o <file>       Output .wasm file"
+  IO.println "  --parse-only    Parse input and exit (no elaboration/lowering)"
   IO.println "  --emit=<target> Print intermediate representation"
   IO.println "                  Targets: core, flat, anf, wasmIR, wat"
   IO.println "  --run=<target>  Interpret at a given IL level"
@@ -82,6 +83,11 @@ def main (args : List String) : IO UInt32 := do
   let ast ← match Source.parse source with
     | .ok ast => pure ast
     | .error e => do IO.eprintln s!"Parse error: {e}"; return 1
+
+  if args.contains "--parse-only" then
+    let _ := ast
+    IO.println "Parse OK"
+    return 0
 
   -- Check for --emit flag
   for arg in args do

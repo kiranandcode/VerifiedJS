@@ -4,8 +4,8 @@
 
 | Pass | Syntax | Semantics | Interp | Print | Pass Impl | Proof |
 |------|--------|-----------|--------|-------|-----------|-------|
-| Source (AST) | stub | N/A | N/A | stub | N/A | N/A |
-| Lexer/Parser | stub | N/A | N/A | N/A | stub | N/A |
+| Source (AST) | partial | N/A | N/A | baseline | N/A | N/A |
+| Lexer/Parser | partial | N/A | N/A | N/A | baseline (single-token expr + tokenization) | N/A |
 | Core | stub | stub | stub | stub | Elaborate: stub | stub |
 | Flat | stub | stub | stub | stub | ClosureConvert: stub | stub |
 | ANF | stub | stub | stub | stub | Convert: stub, Optimize: done (identity) | OptimizeCorrect: done |

@@ -4,6 +4,8 @@
 - [ ] Define JS.Source.AST inductive types (full ECMAScript 2020) — SPEC: §11–15
 - [ ] Implement JS.Source.Lexer (context-sensitive `/` handling) — SPEC: §11
 - [ ] Implement JS.Source.Parser (recursive descent) — SPEC: §11–15
+- [ ] Parser milestone: parse ≥95% of JS files in `tests/flagship/{prettier,babel,TypeScript}` via `scripts/parse_flagship.sh --full`
+- [ ] Parser milestone: support multi-token expression/statement parsing (currently baseline single-token parse only)
 - [ ] Define JS.Core.Syntax inductive types — SPEC: desugared subset
 - [ ] Define JS.Core.Semantics small-step LTS — SPEC: §8, §9
 - [ ] Define JS.Flat.Syntax inductive types
@@ -51,6 +53,9 @@
 - [ ] Write unit tests for each IL
 - [ ] Write e2e tests (compile + run on wasmtime)
 - [ ] Set up differential testing against Node.js
+- [ ] Add nightly full parse sweep: `scripts/parse_flagship.sh --full` and persist failures to `FAILURES.md`
+- [ ] Long-sequence parser gate: run `scripts/parse_flagship.sh --full --integration-only` before merging parser-heavy changes
+- [ ] Keep `tests/run_tests.sh --fast` free of flagship parse scans; run flagship parse only in long-sequence/full test cycles
 - [ ] Flagship: compile Prettier
 - [ ] Flagship: compile Babel
 - [ ] Flagship: compile tsc

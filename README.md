@@ -161,6 +161,7 @@ The parser is **outside the verified TCB**. Validate by:
 - Test262 parse-only tests
 - Round-trip: `parse ∘ print ≈ id` on the AST
 - Differential: parse with VerifiedJS, parse with Acorn/Babel, compare ASTs
+- Flagship parser sweeps using `./scripts/parse_flagship.sh --full --integration-only`
 
 Reference: `argumentcomputer/Wasm.lean` uses Megaparsec.lean for WAST parsing.
 
@@ -445,7 +446,7 @@ These are drawn directly from Anthropic's experience building a C compiler with 
 
 **The problem**: Anthropic found that agents frequently broke existing functionality each time they implemented a new feature.
 
-**Mitigation**: Strict regression gate. `./tests/run_tests.sh --fast` is a pre-push hook. If any previously-passing test fails, the push is rejected. The `--fast` flag runs a 5% deterministic sample (seeded by `$HOSTNAME` so each subagent workspace covers different tests, but the same agent always runs the same subset for regression detection). Full suite runs in CI on every merge to `main`.
+**Mitigation**: Strict regression gate. `./tests/run_tests.sh --fast` is a pre-push hook. If any previously-passing test fails, the push is rejected. The `--fast` path runs only lightweight regression checks (unit/e2e sampling/wasm validation) and intentionally skips flagship parser sweeps. Full suite runs in CI on every merge to `main`.
 
 ```bash
 # pre-push hook (installed in every subagent workspace)
@@ -473,7 +474,7 @@ Pre-compute aggregate statistics. Never make the agent count things manually.
 
 **The problem**: Agents can be time-blind and may spend far too long running tests.
 
-**Mitigation**: The `--fast` flag runs a 5% deterministic subsample. The full suite is only invoked explicitly (`./tests/run_tests.sh --full`). The test harness prints wall-clock elapsed time and warns after 5 minutes:
+**Mitigation**: Keep `--fast` short and run heavyweight checks only in `--full`. Flagship parser coverage runs in long sequences via `./scripts/parse_flagship.sh --full --integration-only`. The test harness prints wall-clock elapsed time and warns after 5 minutes:
 
 ```bash
 if [ "$SECONDS" -gt 300 ]; then
@@ -551,8 +552,8 @@ fi
 ```bash
 #!/bin/bash
 # tests/run_tests.sh
-# --fast: 5% deterministic sample (seeded by $HOSTNAME)
-# --full: everything
+# --fast: lightweight regression checks only
+# --full: includes heavyweight suites
 # Output: one summary line to stdout. Details to test_logs/.
 
 MODE="${1:---fast}"
@@ -573,6 +574,11 @@ else
 fi
 E2E_PASS=$(grep -c "^PASS" "$LOGDIR/e2e.log" || true)
 E2E_FAIL=$(grep -c "^FAIL" "$LOGDIR/e2e.log" || true)
+
+# Flagship parser sweep (full mode only; integration tests only)
+if [ "$MODE" != "--fast" ]; then
+  ./scripts/parse_flagship.sh --full --integration-only > "$LOGDIR/parse_flagship.log" 2>&1 || true
+fi
 
 # Wasm validation
 ./scripts/validate_wasm.sh > "$LOGDIR/validate.log" 2>&1
@@ -718,11 +724,14 @@ Each increment extends `Syntax.lean` and `Semantics.lean` monotonically. Design 
 ./scripts/lake_build_concise.sh                 # concise build summary (warnings hidden by default)
 lake build                                      # full build output
 lake exe verifiedjs input.js -o output.wasm     # compile
+lake exe verifiedjs input.js --parse-only       # parser-only check
 wasmtime output.wasm                             # run
 lake exe verifiedjs input.js --emit=core        # inspect IL
 lake exe verifiedjs input.js --run=anf          # interpret at ANF
 lake test                                        # Lean unit tests
-./tests/run_tests.sh --fast                      # 5% sample e2e
+./tests/run_tests.sh --fast                      # lightweight regression checks
+./tests/run_tests.sh --full                      # full suites (includes flagship parse integration sweep)
+./scripts/parse_flagship.sh --full --integration-only  # long-sequence parser gate
 ./scripts/sorry_report.sh                        # sorry report
 git submodule update --init --recursive          # fetch all submodules (test262 + flagship repos)
 ./scripts/run_flagship_cycles.sh --dry-run       # show flagship build cycle + Lean compile plan

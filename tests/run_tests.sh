@@ -19,8 +19,8 @@ if lake test > "$LOGDIR/unit.log" 2>&1; then
 else
   UNIT_STATUS="fail"
 fi
-UNIT_PASS=$(grep -c "PASS\|✓\|passed" "$LOGDIR/unit.log" 2>/dev/null || echo "0")
-UNIT_FAIL=$(grep -c "FAIL\|✗\|failed" "$LOGDIR/unit.log" 2>/dev/null || echo "0")
+UNIT_PASS=$(grep -c "PASS\|✓\|passed" "$LOGDIR/unit.log" 2>/dev/null || true)
+UNIT_FAIL=$(grep -c "FAIL\|✗\|failed" "$LOGDIR/unit.log" 2>/dev/null || true)
 
 # E2E tests (sample or full)
 E2E_PASS=0
@@ -31,8 +31,19 @@ if [ -x "./scripts/run_e2e.sh" ]; then
   else
     ./scripts/run_e2e.sh > "$LOGDIR/e2e.log" 2>&1 || true
   fi
-  E2E_PASS=$(grep -c "^PASS" "$LOGDIR/e2e.log" 2>/dev/null || echo "0")
-  E2E_FAIL=$(grep -c "^FAIL" "$LOGDIR/e2e.log" 2>/dev/null || echo "0")
+  E2E_PASS=$(grep -c "^PASS" "$LOGDIR/e2e.log" 2>/dev/null || true)
+  E2E_FAIL=$(grep -c "^FAIL" "$LOGDIR/e2e.log" 2>/dev/null || true)
+fi
+
+# Flagship parse smoke tests (run only in --full; integration dirs only)
+PARSE_PASS=0
+PARSE_FAIL=0
+if [ -x "./scripts/parse_flagship.sh" ]; then
+  if [ "$MODE" != "--fast" ]; then
+    ./scripts/parse_flagship.sh --full --integration-only > "$LOGDIR/parse_flagship.log" 2>&1 || true
+    PARSE_PASS=$(grep -c "^PARSE_PASS " "$LOGDIR/parse_flagship.log" 2>/dev/null || true)
+    PARSE_FAIL=$(grep -c "^PARSE_FAIL " "$LOGDIR/parse_flagship.log" 2>/dev/null || true)
+  fi
 fi
 
 # Wasm validation
@@ -40,8 +51,8 @@ VALID=0
 INVALID=0
 if [ -x "./scripts/validate_wasm.sh" ]; then
   ./scripts/validate_wasm.sh > "$LOGDIR/validate.log" 2>&1 || true
-  VALID=$(grep -c "^VALID" "$LOGDIR/validate.log" 2>/dev/null || echo "0")
-  INVALID=$(grep -c "^INVALID" "$LOGDIR/validate.log" 2>/dev/null || echo "0")
+  VALID=$(grep -c "^VALID" "$LOGDIR/validate.log" 2>/dev/null || true)
+  INVALID=$(grep -c "^INVALID" "$LOGDIR/validate.log" 2>/dev/null || true)
 fi
 
 # Time warning
@@ -50,7 +61,7 @@ if [ "$SECONDS" -gt 300 ]; then
 fi
 
 # One-line summary
-echo "Tests: unit=$UNIT_PASS/$((UNIT_PASS+UNIT_FAIL))($UNIT_STATUS) e2e=$E2E_PASS/$((E2E_PASS+E2E_FAIL)) wasm=$VALID/$((VALID+INVALID)) [${SECONDS}s] — logs in $LOGDIR"
+echo "Tests: unit=$UNIT_PASS/$((UNIT_PASS+UNIT_FAIL))($UNIT_STATUS) e2e=$E2E_PASS/$((E2E_PASS+E2E_FAIL)) parse=$PARSE_PASS/$((PARSE_PASS+PARSE_FAIL)) wasm=$VALID/$((VALID+INVALID)) [${SECONDS}s] — logs in $LOGDIR"
 
 # Exit nonzero if any regression
 if [ "$UNIT_STATUS" = "fail" ] || [ "$E2E_FAIL" -gt 0 ] || [ "$INVALID" -gt 0 ]; then
