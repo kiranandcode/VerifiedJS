@@ -16,6 +16,13 @@ SECONDS=0
 echo "Running Lean unit tests..." >&2
 if lake test > "$LOGDIR/unit.log" 2>&1; then
   UNIT_STATUS="ok"
+elif grep -q "no test driver configured" "$LOGDIR/unit.log"; then
+  # Fallback: this repo currently uses a test library target instead of `lake test`.
+  if lake build Tests >> "$LOGDIR/unit.log" 2>&1; then
+    UNIT_STATUS="ok"
+  else
+    UNIT_STATUS="fail"
+  fi
 else
   UNIT_STATUS="fail"
 fi

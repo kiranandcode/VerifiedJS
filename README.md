@@ -737,7 +737,12 @@ git submodule update --init --recursive          # fetch all submodules (test262
 ./scripts/run_flagship_cycles.sh --dry-run       # show flagship build cycle + Lean compile plan
 ./scripts/run_flagship_cycles.sh                 # run build cycles + compile entrypoints with verifiedjs
 ./scripts/run_e2e.sh tests/flagship/prettier/    # flagship target
+./scripts/agent_supervisor.sh spawn --count 3 --dry-run       # create N agent worktrees and run one round
+./scripts/agent_supervisor.sh supervise --count 2 --max-rounds 10  # keep spawning rounds until tests pass
 ```
+
+`scripts/agent_supervisor.sh` assigns tasks centrally from `TASKS.md` and uses atomic local locks in `.agent_locks/` to prevent duplicate task claims across parallel worktrees.
+At the end of each run it prints a supervisor summary (rounds, agent exits, test status, completed/failed task list, log paths).
 
 ---
 

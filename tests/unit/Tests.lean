@@ -4,9 +4,10 @@
 
 import VerifiedJS.Source.AST
 import VerifiedJS.Core.Syntax
+import Tests.ParserTests
 
 -- Basic smoke tests
-#check Source.Expr
-#check Source.Stmt
-#check Core.Expr
-#check Core.Value
+#check VerifiedJS.Source.Expr
+#check VerifiedJS.Source.Stmt
+#check VerifiedJS.Core.Expr
+#check VerifiedJS.Core.Value
