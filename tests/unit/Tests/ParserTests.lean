@@ -4,6 +4,32 @@ namespace Tests
 
 open VerifiedJS.Source
 
+def isDivThenNumber (toks : List Token) : Bool :=
+  match toks with
+  | [ { kind := .ident "a", .. }
+    , { kind := .punct "/", .. }
+    , { kind := .number _, .. }
+    , { kind := .eof, .. }
+    ] => true
+  | _ => false
+
+def hasRegexLiteral (toks : List Token) : Bool :=
+  match toks with
+  | [ { kind := .kw "return", .. }
+    , { kind := .regex "ab+" "gi", .. }
+    , { kind := .eof, .. }
+    ] => true
+  | _ => false
+
+def commentIsIgnored (toks : List Token) : Bool :=
+  match toks with
+  | [ { kind := .ident "a", .. }
+    , { kind := .punct "/", .. }
+    , { kind := .ident "b", .. }
+    , { kind := .eof, .. }
+    ] => true
+  | _ => false
+
 def isMulPrecedence : Expr → Bool
   | .binary .add (.lit (.number _)) (.binary .mul (.lit (.number _)) (.lit (.number _))) => true
   | _ => false
@@ -56,6 +82,21 @@ def isBlockWithAssign : Program → Bool
 #guard
   match parse "{ let x = 1; x = x + 1; }" with
   | .ok p => isBlockWithAssign p
+  | .error _ => false
+
+#guard
+  match tokenize "a / 2" with
+  | .ok toks => isDivThenNumber toks
+  | .error _ => false
+
+#guard
+  match tokenize "return /ab+/gi" with
+  | .ok toks => hasRegexLiteral toks
+  | .error _ => false
+
+#guard
+  match tokenize "a/*x*/ / b // trailing comment" with
+  | .ok toks => commentIsIgnored toks
   | .error _ => false
 
 end Tests

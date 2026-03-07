@@ -17,6 +17,10 @@ FETCH_BEFORE_RUN=1
 STOP_ON_PASS=1
 DRY_RUN=0
 MODE=""
+MONITOR_SECS=5
+CLEANUP_LOCAL=1
+MERGE_LOCAL=1
+KEEP_LOCAL=0
 
 SCRIPT_START_TS="$(date +%s)"
 SUMMARY_PRINTED=0
@@ -53,7 +57,11 @@ Options:
   --test-cmd CMD       Test command for supervise mode (default: ./tests/run_tests.sh --fast)
   --sleep SEC          Delay between rounds in supervise mode (default: 20)
   --max-rounds N       Stop after N rounds (0 = unlimited, default: 0)
+  --monitor-secs N     Print agent progress every N seconds while waiting (default: 5, 0 disables)
   --no-push            Skip pushing agent branches
+  --no-merge-local     Do not merge successful local agent branches into current branch
+  --keep-local         Keep local agent branches/worktrees after run (implies no cleanup)
+  --cleanup-local      Force cleanup of local agent branches/worktrees even with --no-push
   --no-fetch           Skip git fetch before creating worktrees
   --no-stop-on-pass    In supervise mode, keep running even when tests pass
   --dry-run            Print planned actions only
@@ -173,6 +181,34 @@ mark_task_done() {
   fi
 }
 
+mark_task_done_in_tasks() {
+  local task_id="$1"
+  local task_text="$2"
+
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    return 0
+  fi
+
+  local tmp
+  tmp="$(mktemp)"
+  if awk -v t="${task_text}" '
+    {
+      if (!changed && $0 == ("- [ ] " t)) {
+        print "- [x] " t " — DONE by agent supervisor"
+        changed=1
+      } else {
+        print
+      }
+    }
+    END { if (!changed) exit 3 }
+  ' "${TASKS_FILE}" > "${tmp}"; then
+    mv "${tmp}" "${TASKS_FILE}"
+  else
+    rm -f "${tmp}"
+    echo "WARN: could not mark task as done in ${TASKS_FILE}: ${task_id}" >&2
+  fi
+}
+
 release_task_lock() {
   local task_id="$1"
   local lock_path="${LOCK_DIR}/${task_id}"
@@ -220,8 +256,26 @@ parse_args() {
         MAX_ROUNDS="${2:?missing value for --max-rounds}"
         shift 2
         ;;
+      --monitor-secs)
+        MONITOR_SECS="${2:?missing value for --monitor-secs}"
+        shift 2
+        ;;
       --no-push)
         PUSH_AFTER_RUN=0
+        shift
+        ;;
+      --no-merge-local)
+        MERGE_LOCAL=0
+        shift
+        ;;
+      --keep-local)
+        KEEP_LOCAL=1
+        CLEANUP_LOCAL=0
+        shift
+        ;;
+      --cleanup-local)
+        CLEANUP_LOCAL=1
+        KEEP_LOCAL=0
         shift
         ;;
       --no-fetch)
@@ -338,14 +392,14 @@ spawn_codex_bg() {
   prompt+="Implement the task, run ./tests/run_tests.sh --fast, commit your changes, and exit."$'\n'
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    echo "[dry-run] codex run -C ${wt} -p <prompt with assigned task> --mcp-config ${wt}/.mcp.json > ${log}"
+    echo "[dry-run] codex exec -C ${wt} <prompt with assigned task> > ${log}"
     LAST_SPAWN_PID=0
     return 0
   fi
 
   (
     cd "${ROOT_DIR}"
-    codex run -C "${wt}" -p "${prompt}" --mcp-config "${wt}/.mcp.json"
+    codex exec -C "${wt}" "${prompt}"
   ) >"${log}" 2>&1 &
 
   LAST_SPAWN_PID=$!
@@ -356,6 +410,33 @@ push_and_cleanup() {
   local branch="$1"
   local wt="$2"
   local log="$3"
+  local st="${4:-0}"
+  local merged=0
+
+  if [[ "${PUSH_AFTER_RUN}" -eq 0 && "${MERGE_LOCAL}" -eq 1 && "${st}" -eq 0 && "${DRY_RUN}" -eq 0 ]]; then
+    local ahead
+    ahead="$(git -C "${ROOT_DIR}" rev-list --count "HEAD..${branch}" 2>/dev/null || echo 0)"
+    if [[ "${ahead}" -gt 0 ]]; then
+      if git -C "${ROOT_DIR}" diff --quiet && git -C "${ROOT_DIR}" diff --cached --quiet; then
+        if git -C "${ROOT_DIR}" merge --no-ff "${branch}" -m "Merge ${branch}"; then
+          merged=1
+          echo "INFO: merged ${branch} into $(git -C "${ROOT_DIR}" branch --show-current)" >>"${log}"
+        else
+          echo "WARN: merge failed for ${branch}; leaving branch/worktree for manual resolve" >>"${log}"
+          echo "WARN: merge failed for ${branch}; keeping local state"
+          return 0
+        fi
+      else
+        echo "WARN: root tree dirty; skipping auto-merge for ${branch}" >>"${log}"
+      fi
+    fi
+  fi
+
+  if [[ "${KEEP_LOCAL}" -eq 1 ]]; then
+    echo "INFO: retained local branch/worktree for merge: ${branch} (${wt})" >>"${log}"
+    echo "INFO: retained ${branch} at ${wt} (no-push mode)"
+    return 0
+  fi
 
   if [[ "${DRY_RUN}" -eq 0 ]] && ! git -C "${ROOT_DIR}" worktree list --porcelain | grep -Fq "worktree ${wt}"; then
     echo "WARN: skipping cleanup for missing worktree ${wt}" >>"${log}"
@@ -368,6 +449,14 @@ push_and_cleanup() {
     else
       git -C "${wt}" push -u origin "${branch}" >>"${log}" 2>&1 || true
     fi
+  fi
+
+  if [[ "${PUSH_AFTER_RUN}" -eq 0 && "${MERGE_LOCAL}" -eq 1 && "${merged}" -eq 0 ]]; then
+    echo "INFO: local merge not performed for ${branch}" >>"${log}"
+  fi
+
+  if [[ "${CLEANUP_LOCAL}" -eq 0 ]]; then
+    return 0
   fi
 
   run_or_echo git -C "${ROOT_DIR}" worktree remove "${wt}" --force
@@ -450,39 +539,96 @@ spawn_round() {
   done
 
   echo "ROUND ${round}: waiting for ${#pids[@]} agent(s)"
-  for idx in "${!pids[@]}"; do
-    local st=0
-    if [[ "${DRY_RUN}" -eq 1 ]]; then
-      st=0
-    elif [[ "${pids[$idx]}" == "0" ]]; then
-      st=1
-    else
-      if wait "${pids[$idx]}"; then
-        st=0
-      else
-        st=$?
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    for _ in "${pids[@]}"; do
+      statuses+=("0")
+    done
+  else
+    local remaining="${#pids[@]}"
+    local last_report_ts
+    last_report_ts="$(date +%s)"
+    for _ in "${pids[@]}"; do
+      statuses+=("__pending__")
+    done
+
+    while [[ "${remaining}" -gt 0 ]]; do
+      for idx in "${!pids[@]}"; do
+        if [[ "${statuses[$idx]}" != "__pending__" ]]; then
+          continue
+        fi
+        local pid="${pids[$idx]}"
+        if [[ "${pid}" == "0" ]]; then
+          statuses[$idx]="1"
+          remaining=$((remaining - 1))
+          continue
+        fi
+        if kill -0 "${pid}" 2>/dev/null; then
+          continue
+        fi
+        local st=0
+        if wait "${pid}" 2>/dev/null; then
+          st=0
+        else
+          st=$?
+        fi
+        statuses[$idx]="${st}"
+        remaining=$((remaining - 1))
+      done
+
+      if [[ "${remaining}" -eq 0 ]]; then
+        break
       fi
-    fi
-    statuses+=("${st}")
-  done
+
+      if [[ "${MONITOR_SECS}" -gt 0 ]]; then
+        local now_ts
+        now_ts="$(date +%s)"
+        if (( now_ts - last_report_ts >= MONITOR_SECS )); then
+          local done_count=0
+          for st in "${statuses[@]}"; do
+            if [[ "${st}" != "__pending__" ]]; then
+              done_count=$((done_count + 1))
+            fi
+          done
+          echo "ROUND ${round}: progress ${done_count}/${#pids[@]} done, ${remaining} running"
+          for idx in "${!meta[@]}"; do
+            if [[ "${statuses[$idx]}" == "__pending__" ]]; then
+              IFS='|' read -r run_id _b _w log _t <<<"${meta[$idx]}"
+              local log_tail="<no log output yet>"
+              if [[ -s "${log}" ]]; then
+                log_tail="$(tail -n 1 "${log}" | tr -d '\r' | cut -c1-160)"
+              fi
+              echo "  ${run_id}: ${log_tail}"
+            fi
+          done
+          last_report_ts="${now_ts}"
+        fi
+      fi
+      sleep 1
+    done
+  fi
 
   for idx in "${!meta[@]}"; do
     IFS='|' read -r run_id branch wt log task_id <<<"${meta[$idx]}"
     local task_text="${meta_task_texts[$idx]}"
     local st="${statuses[$idx]}"
 
-    push_and_cleanup "${branch}" "${wt}" "${log}"
-    TOTAL_AGENTS=$((TOTAL_AGENTS + 1))
-
     if [[ "${st}" -eq 0 ]]; then
       TOTAL_OK=$((TOTAL_OK + 1))
       SUMMARY_OK+=("${task_text}")
       mark_task_done "${task_id}"
+      mark_task_done_in_tasks "${task_id}" "${task_text}"
     else
       TOTAL_FAIL=$((TOTAL_FAIL + 1))
       SUMMARY_FAIL+=("${task_text}")
       release_task_lock "${task_id}"
     fi
+
+    if ! push_and_cleanup "${branch}" "${wt}" "${log}" "${st}"; then
+      echo "WARN: cleanup/merge step failed for ${branch}; lock status already finalized" >>"${log}"
+      echo "WARN: cleanup/merge failed for ${branch} (see ${log})"
+    fi
+
+    TOTAL_AGENTS=$((TOTAL_AGENTS + 1))
 
     echo "AGENT ${run_id}: exit=${st} task='${task_text}' log=${log}"
   done
