@@ -21,6 +21,7 @@ MONITOR_SECS=5
 CLEANUP_LOCAL=1
 MERGE_LOCAL=1
 KEEP_LOCAL=0
+LAST_INTEGRATED=0
 
 SCRIPT_START_TS="$(date +%s)"
 SUMMARY_PRINTED=0
@@ -178,6 +179,19 @@ mark_task_done() {
     sed -i.bak 's/^status=.*/status=done/' "${lock_path}/meta.txt" 2>/dev/null || true
     rm -f "${lock_path}/meta.txt.bak" 2>/dev/null || true
     echo "done_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${lock_path}/meta.txt"
+  fi
+}
+
+mark_task_pending_merge() {
+  local task_id="$1"
+  local lock_path="${LOCK_DIR}/${task_id}"
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -f "${lock_path}/meta.txt" ]]; then
+    sed -i.bak 's/^status=.*/status=pending_merge/' "${lock_path}/meta.txt" 2>/dev/null || true
+    rm -f "${lock_path}/meta.txt.bak" 2>/dev/null || true
+    echo "pending_merge_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${lock_path}/meta.txt"
   fi
 }
 
@@ -419,6 +433,13 @@ push_and_cleanup() {
   local log="$3"
   local st="${4:-0}"
   local merged=0
+  LAST_INTEGRATED=0
+
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    if [[ "${st}" -eq 0 ]]; then
+      LAST_INTEGRATED=1
+    fi
+  fi
 
   if [[ "${PUSH_AFTER_RUN}" -eq 0 && "${MERGE_LOCAL}" -eq 1 && "${st}" -eq 0 && "${DRY_RUN}" -eq 0 ]]; then
     local ahead
@@ -427,6 +448,7 @@ push_and_cleanup() {
       if git -C "${ROOT_DIR}" diff --quiet && git -C "${ROOT_DIR}" diff --cached --quiet; then
         if git -C "${ROOT_DIR}" merge --no-ff "${branch}" -m "Merge ${branch}"; then
           merged=1
+          LAST_INTEGRATED=1
           echo "INFO: merged ${branch} into $(git -C "${ROOT_DIR}" branch --show-current)" >>"${log}"
         else
           echo "WARN: merge failed for ${branch}; leaving branch/worktree for manual resolve" >>"${log}"
@@ -621,15 +643,27 @@ spawn_round() {
     local task_text="${meta_task_texts[$idx]}"
     local st="${statuses[$idx]}"
     local ahead=0
+    local integrated=0
     if [[ "${DRY_RUN}" -eq 0 ]]; then
       ahead="$(git -C "${ROOT_DIR}" rev-list --count "HEAD..${branch}" 2>/dev/null || echo 0)"
     fi
 
-    if [[ "${st}" -eq 0 && ( "${DRY_RUN}" -eq 1 || "${ahead}" -gt 0 ) ]]; then
+    if ! push_and_cleanup "${branch}" "${wt}" "${log}" "${st}"; then
+      echo "WARN: cleanup/merge step failed for ${branch}; lock status already finalized" >>"${log}"
+      echo "WARN: cleanup/merge failed for ${branch} (see ${log})"
+    fi
+    integrated="${LAST_INTEGRATED}"
+
+    if [[ "${st}" -eq 0 && ( "${DRY_RUN}" -eq 1 || "${ahead}" -gt 0 ) && "${integrated}" -eq 1 ]]; then
       TOTAL_OK=$((TOTAL_OK + 1))
       SUMMARY_OK+=("${task_text}")
       mark_task_done "${task_id}"
       mark_task_done_in_tasks "${task_id}" "${task_text}"
+    elif [[ "${st}" -eq 0 && "${ahead}" -gt 0 ]]; then
+      TOTAL_FAIL=$((TOTAL_FAIL + 1))
+      SUMMARY_FAIL+=("${task_text} (pending merge)")
+      mark_task_pending_merge "${task_id}"
+      echo "WARN: task has commits but is not integrated into main; left as pending_merge: ${task_id}" >>"${log}"
     else
       TOTAL_FAIL=$((TOTAL_FAIL + 1))
       SUMMARY_FAIL+=("${task_text}")
@@ -637,11 +671,6 @@ spawn_round() {
       if [[ "${st}" -eq 0 && "${DRY_RUN}" -eq 0 && "${ahead}" -eq 0 ]]; then
         echo "WARN: agent exited 0 but made no commits on ${branch}; treating as failed" >>"${log}"
       fi
-    fi
-
-    if ! push_and_cleanup "${branch}" "${wt}" "${log}" "${st}"; then
-      echo "WARN: cleanup/merge step failed for ${branch}; lock status already finalized" >>"${log}"
-      echo "WARN: cleanup/merge failed for ${branch} (see ${log})"
     fi
 
     TOTAL_AGENTS=$((TOTAL_AGENTS + 1))

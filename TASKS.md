@@ -1,15 +1,15 @@
 # VerifiedJS — Task List
 
 ## Priority 1 (blocking — foundations)
-- [x] Define JS.Source.AST inductive types (full ECMAScript 2020) — SPEC: §11–15 — DONE by agent supervisor
-- [x] Implement JS.Source.Lexer (context-sensitive `/` handling) — SPEC: §11 — DONE by agent supervisor
-- [x] Implement JS.Source.Parser (recursive descent) — SPEC: §11–15 — DONE by agent supervisor
+- [ ] Define JS.Source.AST inductive types (full ECMAScript 2020) — SPEC: §11–15
+- [ ] Implement JS.Source.Lexer (context-sensitive `/` handling) — SPEC: §11
+- [ ] Implement JS.Source.Parser (recursive descent) — SPEC: §11–15
 - [ ] Parser milestone: parse ≥95% of JS files in `tests/flagship/{prettier,babel,TypeScript}` via `scripts/parse_flagship.sh --full`
 - [ ] Parser milestone: support multi-token expression/statement parsing (currently baseline single-token parse only)
-- [ ] Define JS.Core.Syntax inductive types — SPEC: desugared subset
-- [x] Define JS.Core.Semantics small-step LTS — SPEC: §8, §9 — DONE by agent supervisor
-- [x] Define JS.Flat.Syntax inductive types — DONE by agent supervisor
-- [x] Define JS.ANF.Syntax inductive types — DONE by agent supervisor
+- [ ] Define JS.Core.Syntax inductive types
+- [ ] Define JS.Core.Semantics small-step LTS
+- [ ] Define JS.Flat.Syntax inductive types
+- [ ] Define JS.ANF.Syntax inductive types
 - [ ] Define Wasm.Syntax (port from WasmCert-Coq)
 
 ## Priority 2 (important — passes and interpreters)
