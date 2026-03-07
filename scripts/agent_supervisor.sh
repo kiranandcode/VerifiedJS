@@ -374,6 +374,10 @@ create_worktree() {
       echo "ERROR: failed to create worktree for ${branch} from ${BASE_REF}" >&2
       return 1
     fi
+    # Reuse root dependency cache so agents don't re-fetch Lake deps per worktree.
+    if [[ -d "${ROOT_DIR}/.lake" && ! -e "${wt}/.lake" ]]; then
+      ln -s "${ROOT_DIR}/.lake" "${wt}/.lake" 2>/dev/null || true
+    fi
   fi
 
   echo "${run_id}|${branch}|${wt}|${log}|${task_id}"
@@ -392,14 +396,17 @@ spawn_codex_bg() {
   prompt+="Implement the task, run ./tests/run_tests.sh --fast, commit your changes, and exit."$'\n'
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
-    echo "[dry-run] codex exec -C ${wt} <prompt with assigned task> > ${log}"
+    echo "[dry-run] codex exec -C ${wt} --add-dir ${ROOT_DIR}/.git --add-dir ${ROOT_DIR}/.lake <prompt with assigned task> > ${log}"
     LAST_SPAWN_PID=0
     return 0
   fi
 
   (
     cd "${ROOT_DIR}"
-    codex exec -C "${wt}" "${prompt}"
+    codex exec -C "${wt}" \
+      --add-dir "${ROOT_DIR}/.git" \
+      --add-dir "${ROOT_DIR}/.lake" \
+      "${prompt}"
   ) >"${log}" 2>&1 &
 
   LAST_SPAWN_PID=$!
@@ -611,8 +618,12 @@ spawn_round() {
     IFS='|' read -r run_id branch wt log task_id <<<"${meta[$idx]}"
     local task_text="${meta_task_texts[$idx]}"
     local st="${statuses[$idx]}"
+    local ahead=0
+    if [[ "${DRY_RUN}" -eq 0 ]]; then
+      ahead="$(git -C "${ROOT_DIR}" rev-list --count "HEAD..${branch}" 2>/dev/null || echo 0)"
+    fi
 
-    if [[ "${st}" -eq 0 ]]; then
+    if [[ "${st}" -eq 0 && ( "${DRY_RUN}" -eq 1 || "${ahead}" -gt 0 ) ]]; then
       TOTAL_OK=$((TOTAL_OK + 1))
       SUMMARY_OK+=("${task_text}")
       mark_task_done "${task_id}"
@@ -621,6 +632,9 @@ spawn_round() {
       TOTAL_FAIL=$((TOTAL_FAIL + 1))
       SUMMARY_FAIL+=("${task_text}")
       release_task_lock "${task_id}"
+      if [[ "${st}" -eq 0 && "${DRY_RUN}" -eq 0 && "${ahead}" -eq 0 ]]; then
+        echo "WARN: agent exited 0 but made no commits on ${branch}; treating as failed" >>"${log}"
+      fi
     fi
 
     if ! push_and_cleanup "${branch}" "${wt}" "${log}" "${st}"; then

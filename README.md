@@ -409,6 +409,8 @@ All work is driven by three coordination files. Agents read these on startup and
 
 **`PROGRESS.md`** — per-pass status. Updated by every agent before pushing.
 
+When agents discover missing prerequisite work, regressions, or follow-up tasks while implementing, they must add new unchecked items to `TASKS.md` immediately (with priority + short rationale/dependency note), then continue or hand off.
+
 ### Agent Startup Protocol
 
 Every agent, on every spawn, does this:
@@ -421,6 +423,7 @@ Every agent, on every spawn, does this:
 6. If the task is proof work, read `PROOF_BLOCKERS.md` to avoid repeating failed attempts.
 7. Do the task. Run `./tests/run_tests.sh --fast` before pushing.
 8. Update `TASKS.md` (mark done), `PROGRESS.md` (update status), and `SORRY_REPORT.md` (run script).
+   If the task revealed additional required work, append those new tasks to `TASKS.md` before exiting.
 9. Remove lock. Push. Clean up worktree (`git worktree remove`). Exit.
 
 ### Task Types (any agent can do any of these)
@@ -756,6 +759,7 @@ At the end of each run it prints a supervisor summary (rounds, agent exits, test
 6. **Every change must pass `./tests/run_tests.sh --fast`.** No regressions.
 7. **No context pollution.** Print one-line summaries. Log details to files.
 8. **Update coordination files** (`TASKS.md`, `PROGRESS.md`) before pushing.
+   If you discover new required work, add it as a new unchecked task in `TASKS.md` (with priority/dependency note).
 9. **Small commits.** One logical change per commit. Easier to merge, easier to bisect.
 10. **When stuck on a proof >30 minutes**, file in `PROOF_BLOCKERS.md` with the goal state and failed approaches. Move on.
 11. **If a proof has failed 3+ times**, mark `ESCALATE:` in `PROOF_BLOCKERS.md`. The property might be false.

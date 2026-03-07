@@ -7,9 +7,9 @@
 - [ ] Parser milestone: parse ≥95% of JS files in `tests/flagship/{prettier,babel,TypeScript}` via `scripts/parse_flagship.sh --full`
 - [ ] Parser milestone: support multi-token expression/statement parsing (currently baseline single-token parse only)
 - [ ] Define JS.Core.Syntax inductive types — SPEC: desugared subset
-- [ ] Define JS.Core.Semantics small-step LTS — SPEC: §8, §9
-- [ ] Define JS.Flat.Syntax inductive types
-- [ ] Define JS.ANF.Syntax inductive types
+- [x] Define JS.Core.Semantics small-step LTS — SPEC: §8, §9 — DONE by agent supervisor
+- [x] Define JS.Flat.Syntax inductive types — DONE by agent supervisor
+- [x] Define JS.ANF.Syntax inductive types — DONE by agent supervisor
 - [ ] Define Wasm.Syntax (port from WasmCert-Coq)
 
 ## Priority 2 (important — passes and interpreters)
