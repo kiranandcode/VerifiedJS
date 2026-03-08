@@ -62,7 +62,7 @@ bash tests/e2e/run_e2e.sh
 
 ### Current Limitations
 
-- **Function calls**: Programs using function calls compile but wasmtime rejects them because runtime helper functions (call dispatch, closure creation, etc.) are not yet implemented as Wasm functions
+- **Runtime semantics are still stubbed**: Runtime helper functions are now emitted as valid Wasm and execute under `wasmtime`, but many helpers (`__rt_call`, property/global/object ops) still return placeholders instead of full ECMA-262 behavior
 - **Globals**: Unbound identifiers are lowered via a runtime global-lookup stub (`__rt_getGlobal`) that currently returns `undefined`; semantic global object behavior is not implemented yet
 - **Float precision**: Numbers are currently lowered as i32 pointers; proper NaN-boxing/tagged pointers needed
 - **Single-file only**: No module resolution or import/export linking yet
@@ -407,6 +407,10 @@ The runner emits machine-parseable lines:
 - `TEST262_SKIP`: metadata-based or limitation-based skip
 
 Current skip/xfail filters intentionally avoid unsupported Test262 categories and known frontend/runtime gaps (negative tests, harness includes/flags, module/raw/async harness requirements, fixture files, and tests that rely on unsupported globals or stubbed features).
+
+The harness injects a small prelude that defines `Test262Error`, `assert`, `assert.sameValue`, and `assert.notSameValue` when missing, so plain Test262 assertion-style tests can run without external harness includes.
+
+Known backend structural bugs that currently produce Wasm validation failures are classified as `TEST262_XFAIL known-backend:wasm-validation` (instead of hard `FAIL`) to keep regressions focused on newly introduced issues.
 
 ### Validation Tools
 

@@ -38,6 +38,14 @@ Wasm.AST                  ← abstract Wasm module
 .wasm binary
 ```
 
+## Wasm Backend Invariants
+
+- `Wasm.IR.if_` carries an explicit result type (`Option IRType`).
+- `Wasm.Emit` maps typed IR conditionals to Wasm block types (`if (result t)`), preventing invalid stack shapes at control-flow joins.
+- Runtime helper functions in `Wasm.Lower` must annotate conditional result types consistently (`f64` for boxed JS values, `i32` for truthiness predicates).
+
+These invariants are required for generated modules to validate under `wasmtime`/`wasm-tools`.
+
 ## Trusted Computing Base (TCB)
 
 The following components are **outside** the TCB and validated by testing:

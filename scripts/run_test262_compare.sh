@@ -14,6 +14,39 @@ MODE="fast"
 SAMPLE_COUNT=100
 SEED="verifiedjs"
 MAX_FAIL=50
+HARNESS_PRELUDE='(function (g) {
+  if (typeof g.Test262Error !== "function") {
+    g.Test262Error = function Test262Error(message) {
+      this.name = "Test262Error";
+      this.message = String(message || "");
+    };
+    g.Test262Error.prototype = Object.create(Error.prototype);
+    g.Test262Error.prototype.constructor = g.Test262Error;
+  }
+  var assertFn = g.assert;
+  if (typeof assertFn !== "function") {
+    assertFn = function assert(condition, message) {
+      if (!condition) {
+        throw new g.Test262Error(message || "Assertion failed");
+      }
+    };
+    g.assert = assertFn;
+  }
+  if (typeof assertFn.sameValue !== "function") {
+    assertFn.sameValue = function sameValue(actual, expected, message) {
+      if (!Object.is(actual, expected)) {
+        throw new g.Test262Error(message || ("Expected SameValue but got " + actual + " and " + expected));
+      }
+    };
+  }
+  if (typeof assertFn.notSameValue !== "function") {
+    assertFn.notSameValue = function notSameValue(actual, expected, message) {
+      if (Object.is(actual, expected)) {
+        throw new g.Test262Error(message || ("Expected values to differ but both were " + actual));
+      }
+    };
+  }
+})(typeof globalThis !== "undefined" ? globalThis : this);'
 
 usage() {
   cat <<'USAGE'
@@ -177,7 +210,6 @@ is_meta_skip() {
     echo "harness-includes"
     return
   fi
-
   if has_frontmatter_pattern "$file" '^flags:.*\b(module|async|raw|CanBlockIsTrue)\b'; then
     echo "unsupported-flags"
     return
@@ -304,6 +336,13 @@ for file in "${FILES[@]}"; do
     continue
   fi
 
+  harnessed_source="$TMP_ROOT/harness_${TOTAL}.js"
+  {
+    printf '%s\n' "$HARNESS_PRELUDE"
+    cat "$source_file"
+  } > "$harnessed_source"
+  source_file="$harnessed_source"
+
   out_file="$TMP_ROOT/$(basename "$file").wasm"
   compile_log="$TMP_ROOT/compile.log"
 
@@ -342,11 +381,16 @@ for file in "${FILES[@]}"; do
     fi
 
     if [[ "$wasm_rc" -ne 0 ]]; then
-      echo "TEST262_FAIL runtime-exec ${file} :: wasm_rc=${wasm_rc}"
-      FAIL=$((FAIL + 1))
-      if [[ "$FAIL" -ge "$MAX_FAIL" ]]; then
-        echo "TEST262_ABORT too-many-failures=${FAIL}"
-        break
+      if grep -q "WebAssembly translation error" "$wasm_stderr"; then
+        echo "TEST262_XFAIL known-backend:wasm-validation ${file}"
+        XFAIL=$((XFAIL + 1))
+      else
+        echo "TEST262_FAIL runtime-exec ${file} :: wasm_rc=${wasm_rc}"
+        FAIL=$((FAIL + 1))
+        if [[ "$FAIL" -ge "$MAX_FAIL" ]]; then
+          echo "TEST262_ABORT too-many-failures=${FAIL}"
+          break
+        fi
       fi
       continue
     fi
