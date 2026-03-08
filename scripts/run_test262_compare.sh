@@ -181,16 +181,37 @@ hash_hex() {
   fi
 }
 
+gcd() {
+  local a="$1"
+  local b="$2"
+  while [[ "$b" -ne 0 ]]; do
+    local t="$b"
+    b=$((a % b))
+    a="$t"
+  done
+  echo "$a"
+}
+
 if [[ "$SAMPLE_COUNT" -gt 0 ]]; then
-  FILES=()
-  while IFS= read -r line; do
-    FILES+=("$line")
-  done < <(
-    for f in "${ALL_FILES[@]}"; do
-      key="$(hash_hex "${SEED}:${f}")"
-      printf '%s\t%s\n' "$key" "$f"
-    done | sort | head -n "$SAMPLE_COUNT" | cut -f2-
-  )
+  total_files="${#ALL_FILES[@]}"
+  if [[ "$SAMPLE_COUNT" -ge "$total_files" ]]; then
+    FILES=("${ALL_FILES[@]}")
+  else
+    seed_hex="$(hash_hex "$SEED")"
+    seed_num=$((16#${seed_hex:0:8}))
+    start_idx=$((seed_num % total_files))
+    step=7919
+    while [[ "$(gcd "$step" "$total_files")" -ne 1 ]]; do
+      step=$((step + 2))
+    done
+
+    FILES=()
+    idx="$start_idx"
+    while [[ "${#FILES[@]}" -lt "$SAMPLE_COUNT" ]]; do
+      FILES+=("${ALL_FILES[$idx]}")
+      idx=$(((idx + step) % total_files))
+    done
+  fi
 else
   FILES=("${ALL_FILES[@]}")
 fi
