@@ -11,7 +11,7 @@
 ## Priority 2 (important — passes and interpreters)
 - [ ] Implement Core.Elaborate (JS.AST → JS.Core) — SPEC: §14.6, §13.15.5, §13.7
 - [ ] Make test suite check core elaboration
-- [ ] Implement Flat.ClosureConvert (JS.Core → JS.Flat)
+- [x] Implement Flat.ClosureConvert (JS.Core → JS.Flat)
 - [ ] Make test suite check for flat closure conversion
 - [ ] Implement ANF.Convert (JS.Flat → JS.ANF)
 - [ ] Make test suite check for ANF conversion
