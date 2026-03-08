@@ -29,7 +29,8 @@
 - [ ] Write Wasm.IR.Print pretty-printer
 
 ## Priority 3 (proof work)
-- [ ] Define ANF.Semantics small-step LTS
+- [x] Define Flat.Semantics small-step LTS — TODO(supervisor): Replace the `getEnv` placeholder error with real heap environment lookup semantics in `VerifiedJS/Flat/Semantics.lean`.
+- [x] Define ANF.Semantics small-step LTS
 - [ ] Define Wasm.Semantics (port from WasmCert-Coq)
 - [ ] Prove ElaborateCorrect.lean
 - [ ] Prove ClosureConvertCorrect.lean
