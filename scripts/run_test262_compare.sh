@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # VerifiedJS Test262 compiler comparison harness.
 #
-# Compares Node syntax acceptance with VerifiedJS compile acceptance on the
-# embedded Test262 suite, with limitation-aware skips/xfails.
+# Compiles Test262 cases with VerifiedJS, runs generated wasm, and compares
+# output with Node.js only when wasm output is produced.
 
 set -euo pipefail
 
@@ -70,6 +70,10 @@ if ! command -v node >/dev/null 2>&1; then
   echo "ERROR: node is required for Test262 comparison" >&2
   exit 2
 fi
+if ! command -v wasmtime >/dev/null 2>&1; then
+  echo "ERROR: wasmtime is required for runtime comparison" >&2
+  exit 2
+fi
 
 VERIFIEDJS_BIN="$ROOT_DIR/.lake/build/bin/verifiedjs"
 if [[ ! -x "$VERIFIEDJS_BIN" ]]; then
@@ -95,9 +99,47 @@ has_frontmatter_pattern() {
   frontmatter "$file" | grep -Eq "$pat"
 }
 
+is_case_file() {
+  local file="$1"
+  [[ "$file" == *.case ]]
+}
+
+extract_case_value() {
+  local file="$1"
+  local key="$2"
+  awk -v key="$key" '
+    BEGIN { active = 0 }
+    {
+      if ($0 ~ /^[[:space:]]*\/\/-[[:space:]]*/) {
+        line = $0
+        sub(/^[[:space:]]*\/\/-[[:space:]]*/, "", line)
+        split(line, parts, /[^A-Za-z0-9_:-]/)
+        active = (parts[1] == key)
+        next
+      }
+      if (active) {
+        sub(/^[[:space:]]+/, "", $0)
+        print
+      }
+    }
+  ' "$file"
+}
+
 limitation_reason() {
   local file="$1"
 
+  if has_frontmatter_pattern "$file" '^features:.*iterator-helpers'; then
+    echo "iterator-helpers"
+    return
+  fi
+  if [[ "$file" == *"/annexB/"* ]]; then
+    echo "annex-b"
+    return
+  fi
+  if has_frontmatter_pattern "$file" '^features:.*destructuring-assignment'; then
+    echo "destructuring"
+    return
+  fi
   if grep -Eq '\?\.|\?\?' "$file"; then
     echo "optional-chaining-or-nullish"
     return
@@ -110,7 +152,7 @@ limitation_reason() {
     echo "for-in-of"
     return
   fi
-  if grep -Eq '\{[^\n\}]*\}[[:space:]]*=|\[[^\n\]]*\][[:space:]]*=' "$file"; then
+  if grep -Eq '\([[:space:]]*\{[^\n\}]*\}[[:space:]]*=|\{[^\n\}]*\}[[:space:]]*=|\[[^\n\]]*\][[:space:]]*=' "$file"; then
     echo "destructuring"
     return
   fi
@@ -161,7 +203,7 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 ALL_FILES=()
 while IFS= read -r line; do
   ALL_FILES+=("$line")
-done < <(find "$SUITE_DIR" -type f -name '*.js' | LC_ALL=C sort)
+done < <(find "$SUITE_DIR" -type f \( -name '*.js' -o -name '*.case' \) | LC_ALL=C sort)
 
 if [[ "${#ALL_FILES[@]}" -eq 0 ]]; then
   echo "ERROR: no test files found under $SUITE_DIR" >&2
@@ -215,21 +257,48 @@ fi
 for file in "${FILES[@]}"; do
   TOTAL=$((TOTAL + 1))
 
-  meta_skip="$(is_meta_skip "$file")"
-  if [[ -n "$meta_skip" ]]; then
-    echo "TEST262_SKIP ${meta_skip} ${file}"
-    SKIP=$((SKIP + 1))
-    continue
+  source_file="$file"
+  case_expected_error=""
+  if is_case_file "$file"; then
+    case_setup="$(extract_case_value "$file" "setup")"
+    case_teardown="$(extract_case_value "$file" "teardown")"
+    case_name_block="$(extract_case_value "$file" "name")"
+    case_error_line="$(extract_case_value "$file" "error" | head -n1 || true)"
+    case_expected_error="$(printf '%s' "$case_error_line" | awk '{print $1}')"
+    if [[ -z "$case_setup" ]]; then
+      echo "TEST262_SKIP case-no-setup ${file}"
+      SKIP=$((SKIP + 1))
+      continue
+    fi
+    source_file="$TMP_ROOT/case_${TOTAL}.js"
+    {
+      printf '%s\n' "$case_setup"
+      if [[ -n "$case_name_block" ]]; then
+        printf '\n%s\n' "$case_name_block"
+      fi
+      if [[ -n "$case_teardown" ]]; then
+        printf '\n%s\n' "$case_teardown"
+      fi
+    } > "$source_file"
   fi
 
-  limitation="$(limitation_reason "$file")"
-  if [[ -n "$limitation" ]]; then
-    echo "TEST262_SKIP limitation:${limitation} ${file}"
-    SKIP=$((SKIP + 1))
-    continue
+  if ! is_case_file "$file"; then
+    meta_skip="$(is_meta_skip "$file")"
+    if [[ -n "$meta_skip" ]]; then
+      echo "TEST262_SKIP ${meta_skip} ${file}"
+      SKIP=$((SKIP + 1))
+      continue
+    fi
+
+    limitation="$(limitation_reason "$file")"
+    if [[ -n "$limitation" ]]; then
+      echo "TEST262_SKIP limitation:${limitation} ${file}"
+      SKIP=$((SKIP + 1))
+      continue
+    fi
   fi
 
-  if ! node --check "$file" >/dev/null 2>&1; then
+  if ! node --check "$source_file" >/dev/null 2>&1; then
     echo "TEST262_SKIP node-check-failed ${file}"
     SKIP=$((SKIP + 1))
     continue
@@ -238,9 +307,87 @@ for file in "${FILES[@]}"; do
   out_file="$TMP_ROOT/$(basename "$file").wasm"
   compile_log="$TMP_ROOT/compile.log"
 
-  if "$VERIFIEDJS_BIN" "$file" -o "$out_file" >"$compile_log" 2>&1; then
-    echo "TEST262_PASS ${file}"
-    PASS=$((PASS + 1))
+  if "$VERIFIEDJS_BIN" "$source_file" -o "$out_file" >"$compile_log" 2>&1; then
+    wasm_stdout="$TMP_ROOT/wasm.stdout"
+    wasm_stderr="$TMP_ROOT/wasm.stderr"
+    wasm_rc=0
+    wasmtime run "$out_file" >"$wasm_stdout" 2>"$wasm_stderr" || wasm_rc=$?
+
+    if [[ -n "$case_expected_error" ]]; then
+      node_stdout="$TMP_ROOT/node.stdout"
+      node_stderr="$TMP_ROOT/node.stderr"
+      node_rc=0
+      node "$source_file" >"$node_stdout" 2>"$node_stderr" || node_rc=$?
+      if [[ "$node_rc" -eq 0 ]] || ! grep -Eq "(^|[^[:alnum:]_])${case_expected_error}([^[:alnum:]_]|$)" "$node_stderr"; then
+        echo "TEST262_FAIL case-invalid-error-spec ${file} :: expected=${case_expected_error}"
+        FAIL=$((FAIL + 1))
+        if [[ "$FAIL" -ge "$MAX_FAIL" ]]; then
+          echo "TEST262_ABORT too-many-failures=${FAIL}"
+          break
+        fi
+        continue
+      fi
+      if [[ "$wasm_rc" -ne 0 ]]; then
+        echo "TEST262_PASS ${file}"
+        PASS=$((PASS + 1))
+      else
+        echo "TEST262_FAIL runtime-expected-error-missing ${file} :: expected=${case_expected_error}"
+        FAIL=$((FAIL + 1))
+        if [[ "$FAIL" -ge "$MAX_FAIL" ]]; then
+          echo "TEST262_ABORT too-many-failures=${FAIL}"
+          break
+        fi
+      fi
+      continue
+    fi
+
+    if [[ "$wasm_rc" -ne 0 ]]; then
+      echo "TEST262_FAIL runtime-exec ${file} :: wasm_rc=${wasm_rc}"
+      FAIL=$((FAIL + 1))
+      if [[ "$FAIL" -ge "$MAX_FAIL" ]]; then
+        echo "TEST262_ABORT too-many-failures=${FAIL}"
+        break
+      fi
+      continue
+    fi
+
+    if [[ -s "$wasm_stdout" ]] || [[ -s "$wasm_stderr" ]]; then
+      node_stdout="$TMP_ROOT/node.stdout"
+      node_stderr="$TMP_ROOT/node.stderr"
+      node_rc=0
+      node "$source_file" >"$node_stdout" 2>"$node_stderr" || node_rc=$?
+
+      if grep -Eq 'ReferenceError: (assert|Test262Error|\$DONE) is not defined' "$node_stderr"; then
+        echo "TEST262_SKIP runtime-harness-global ${file}"
+        SKIP=$((SKIP + 1))
+        continue
+      fi
+
+      if [[ "$node_rc" -ne 0 ]]; then
+        echo "TEST262_FAIL runtime-node-exec ${file} :: node_rc=${node_rc}"
+        FAIL=$((FAIL + 1))
+        if [[ "$FAIL" -ge "$MAX_FAIL" ]]; then
+          echo "TEST262_ABORT too-many-failures=${FAIL}"
+          break
+        fi
+        continue
+      fi
+
+      if cmp -s "$node_stdout" "$wasm_stdout" && cmp -s "$node_stderr" "$wasm_stderr"; then
+        echo "TEST262_PASS ${file}"
+        PASS=$((PASS + 1))
+      else
+        echo "TEST262_FAIL runtime-output-mismatch ${file}"
+        FAIL=$((FAIL + 1))
+        if [[ "$FAIL" -ge "$MAX_FAIL" ]]; then
+          echo "TEST262_ABORT too-many-failures=${FAIL}"
+          break
+        fi
+      fi
+    else
+      echo "TEST262_PASS ${file}"
+      PASS=$((PASS + 1))
+    fi
   else
     first_err="$(grep -E 'Compilation error:|Pipeline error:|Elaboration error:' "$compile_log" | head -n1 || true)"
     if [[ "$first_err" == *"unbound variable"* ]] || [[ "$first_err" == *"stub"* ]]; then

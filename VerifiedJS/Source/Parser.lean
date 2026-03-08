@@ -505,7 +505,7 @@ private partial def parseFunctionExpr : ParserM Expr := do
     | .ident n =>
       let _ <- bump
       pure (some n)
-  | _ => pure none)
+    | _ => pure none)
   let params <- parseParamList
   skipNewlines
   let body <- parseFunctionBody
@@ -526,6 +526,14 @@ private partial def parsePrimaryM : ParserM Expr := do
   skipNewlines
   let t <- peek
   match t.kind with
+  | .ident "async" =>
+    let t1 <- peekN 1
+    if tokenIsKeyword t1 "function" then
+      let _ <- bump
+      parseFunctionExpr
+    else
+      let _ <- bump
+      pure (.ident "async")
   | .number n =>
     let _ <- bump
     pure (.lit (.number n))
@@ -1240,6 +1248,7 @@ private partial def parseStmt : ParserM Stmt := do
     let cond <- parseExprM
     expectPunct ")"
     let thenS <- parseStmt
+    skipNewlines
     let elseS <- if (← consumeKeyword? "else") then some <$> parseStmt else pure none
     pure (.if cond thenS elseS)
   | .kw "while" =>

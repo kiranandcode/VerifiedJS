@@ -97,15 +97,13 @@ private def hexDigitVal? (c : Char) : Option Nat :=
   else
     none
 
-private def parseUnicodeEscapeStart? : List Char → Option (Char × List Char × Nat) :=
-  match · with
+private def parseUnicodeEscapeStart? : List Char → Option (Char × List Char × Nat) := fun chars =>
+  match chars with
   | '\\' :: 'u' :: h1 :: h2 :: h3 :: h4 :: rest =>
       match hexDigitVal? h1, hexDigitVal? h2, hexDigitVal? h3, hexDigitVal? h4 with
       | some v1, some v2, some v3, some v4 =>
           let cp := v1 * 4096 + v2 * 256 + v3 * 16 + v4
-          match Char.ofNat? cp with
-          | some ch => some (ch, rest, 6)
-          | none => none
+          some (Char.ofNat cp, rest, 6)
       | _, _, _, _ => none
   | _ => none
 
@@ -147,17 +145,17 @@ private def parseUnsignedDecimal? (cs : List Char) : Option Nat :=
 private def parseNumberFloat (raw : String) : Float :=
   let s := String.mk (stripUnderscoresChars raw.toList)
   if s.startsWith "0x" || s.startsWith "0X" then
-    let hexPart := (s.drop 2).toList
+    let hexPart := (s.drop 2).toString.toList
     match parseNatBase? 16 hexPart with
     | some n => Float.ofNat n
     | none => 0.0
   else if s.startsWith "0b" || s.startsWith "0B" then
-    let binPart := (s.drop 2).toList
+    let binPart := (s.drop 2).toString.toList
     match parseNatBase? 2 binPart with
     | some n => Float.ofNat n
     | none => 0.0
   else if s.startsWith "0o" || s.startsWith "0O" then
-    let octPart := (s.drop 2).toList
+    let octPart := (s.drop 2).toString.toList
     match parseNatBase? 8 octPart with
     | some n => Float.ofNat n
     | none => 0.0
@@ -206,33 +204,44 @@ private def parseNumberFloat (raw : String) : Float :=
               mantVal * pow10Nat e
         | none => mantVal
 
+private def readWhileChars (chars : List Char) (p : Char → Bool) : List Char × List Char :=
+  let rec go (rest acc : List Char) :=
+    match rest with
+    | c :: cs =>
+        if p c then
+          go cs (c :: acc)
+        else
+          (acc.reverse, rest)
+    | [] => (acc.reverse, [])
+  go chars []
+
 private def readNumberLiteral (chars : List Char) : String × List Char :=
   match chars with
   | '0' :: ('x' :: cs) =>
-      let (restDigits, rest) := readWhile cs (fun ch => ch.isDigit || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch = '_')
+      let (restDigits, rest) := readWhileChars cs (fun ch => ch.isDigit || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch = '_')
       ("0x" ++ String.mk restDigits, rest)
   | '0' :: ('X' :: cs) =>
-      let (restDigits, rest) := readWhile cs (fun ch => ch.isDigit || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch = '_')
+      let (restDigits, rest) := readWhileChars cs (fun ch => ch.isDigit || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch = '_')
       ("0X" ++ String.mk restDigits, rest)
   | '0' :: ('b' :: cs) =>
-      let (restDigits, rest) := readWhile cs (fun ch => ch = '0' || ch = '1' || ch = '_')
+      let (restDigits, rest) := readWhileChars cs (fun ch => ch = '0' || ch = '1' || ch = '_')
       ("0b" ++ String.mk restDigits, rest)
   | '0' :: ('B' :: cs) =>
-      let (restDigits, rest) := readWhile cs (fun ch => ch = '0' || ch = '1' || ch = '_')
+      let (restDigits, rest) := readWhileChars cs (fun ch => ch = '0' || ch = '1' || ch = '_')
       ("0B" ++ String.mk restDigits, rest)
   | '0' :: ('o' :: cs) =>
-      let (restDigits, rest) := readWhile cs (fun ch => ((ch >= '0' && ch <= '7') || ch = '_'))
+      let (restDigits, rest) := readWhileChars cs (fun ch => ((ch >= '0' && ch <= '7') || ch = '_'))
       ("0o" ++ String.mk restDigits, rest)
   | '0' :: ('O' :: cs) =>
-      let (restDigits, rest) := readWhile cs (fun ch => ((ch >= '0' && ch <= '7') || ch = '_'))
+      let (restDigits, rest) := readWhileChars cs (fun ch => ((ch >= '0' && ch <= '7') || ch = '_'))
       ("0O" ++ String.mk restDigits, rest)
   | _ =>
-      let (intDigits, rest0) := readWhile chars (fun ch => ch.isDigit || ch = '_')
+      let (intDigits, rest0) := readWhileChars chars (fun ch => ch.isDigit || ch = '_')
       let intPart := String.mk intDigits
       let (fracPart, rest1) :=
         match rest0 with
         | '.' :: tail =>
-            let (fracDigits, restTail) := readWhile tail (fun ch => ch.isDigit || ch = '_')
+            let (fracDigits, restTail) := readWhileChars tail (fun ch => ch.isDigit || ch = '_')
             ("." ++ String.mk fracDigits, restTail)
         | _ => ("", rest0)
       let (expPart, rest2) :=
@@ -243,7 +252,7 @@ private def readNumberLiteral (chars : List Char) : String × List Char :=
               | ('+' :: more) => ("+", more)
               | ('-' :: more) => ("-", more)
               | _ => ("", tail)
-            let (expDigits, restTail) := readWhile tail1 (fun ch => ch.isDigit || ch = '_')
+            let (expDigits, restTail) := readWhileChars tail1 (fun ch => ch.isDigit || ch = '_')
             ("e" ++ signPart ++ String.mk expDigits, restTail)
         | ('E' :: tail) =>
             let (signPart, tail1) :=
@@ -251,7 +260,7 @@ private def readNumberLiteral (chars : List Char) : String × List Char :=
               | ('+' :: more) => ("+", more)
               | ('-' :: more) => ("-", more)
               | _ => ("", tail)
-            let (expDigits, restTail) := readWhile tail1 (fun ch => ch.isDigit || ch = '_')
+            let (expDigits, restTail) := readWhileChars tail1 (fun ch => ch.isDigit || ch = '_')
             ("E" ++ signPart ++ String.mk expDigits, restTail)
         | _ => ("", rest1)
       (intPart ++ fracPart ++ expPart, rest2)

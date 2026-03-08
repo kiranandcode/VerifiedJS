@@ -63,9 +63,17 @@ structure LowerState where
   locals : Array IR.IRType
   nextStringId : Nat
   strings : List (String × Nat)
+  nextLabelId : Nat
   deriving Inhabited
 
 abbrev LowerM := StateT LowerState (Except String)
+
+structure CtrlFrame where
+  userLabel : Option String
+  breakTarget : String
+  continueTarget : Option String
+  allowUnlabeledBreak : Bool
+  allowUnlabeledContinue : Bool
 
 private def lookupLocal (ctx : LowerCtx) (name : ANF.VarName) : Except String Nat :=
   match ctx.locals.find? (fun pair => pair.fst = name) with
@@ -104,6 +112,12 @@ private def internString (s : String) : LowerM Nat := do
       let idx := st.nextStringId
       set { st with nextStringId := idx + 1, strings := (s, idx) :: st.strings }
       pure idx
+
+private def freshLabel (lblPrefix : String) : LowerM String := do
+  let st ← get
+  let n := st.nextLabelId
+  set { st with nextLabelId := n + 1 }
+  pure s!"{lblPrefix}_{n}"
 
 private def mkStringRefConstM (s : String) : LowerM IR.IRInstr := do
   let sid ← internString s
@@ -275,46 +289,66 @@ private partial def lowerComplex (ctx : LowerCtx) : ANF.ComplexExpr → LowerM (
       | some fn => pure (lhsCode ++ rhsCode ++ [IR.IRInstr.call fn])
       | none => pure (lhsCode ++ rhsCode ++ [IR.IRInstr.binOp .f64 (lowerBinOp op)])
 
-private partial def lowerExpr (ctx : LowerCtx) : ANF.Expr → LowerM (List IR.IRInstr)
+private def lookupBreakTarget (stack : List CtrlFrame) (label : Option String) : Option String :=
+  match label with
+  | some wanted =>
+      (stack.find? (fun f => f.userLabel = some wanted)).map (·.breakTarget)
+  | none =>
+      (stack.find? (fun f => f.allowUnlabeledBreak)).map (·.breakTarget)
+
+private def lookupContinueTarget (stack : List CtrlFrame) (label : Option String) : Option String :=
+  match label with
+  | some wanted =>
+      match stack.find? (fun f => f.userLabel = some wanted) with
+      | some f => f.continueTarget
+      | none => none
+  | none =>
+      match stack.find? (fun f => f.allowUnlabeledContinue) with
+      | some f => f.continueTarget
+      | none => none
+
+mutual
+
+private partial def lowerExprWithExn (ctx : LowerCtx) (exnTarget : Option String)
+    (ctrlStack : List CtrlFrame) :
+    ANF.Expr → LowerM (List IR.IRInstr)
   | .trivial t => lowerTrivialM ctx t
   | .«let» name rhs body => do
       let rhsCode ← lowerComplex ctx rhs
       let (idx, ctx') ← allocLocal name ctx
-      let bodyCode ← lowerExpr ctx' body
+      let bodyCode ← lowerExprWithExn ctx' exnTarget ctrlStack body
       pure (rhsCode ++ [IR.IRInstr.localSet idx] ++ bodyCode)
   | .seq a b => do
-      let aCode ← lowerExpr ctx a
-      let bCode ← lowerExpr ctx b
+      let aCode ← lowerExprWithExn ctx exnTarget ctrlStack a
+      let bCode ← lowerExprWithExn ctx exnTarget ctrlStack b
       pure (aCode ++ [IR.IRInstr.drop] ++ bCode)
   | .«if» cond then_ else_ => do
       let condCode ← lowerTrivialM ctx cond
-      let thenCode ← lowerExpr ctx then_
-      let elseCode ← lowerExpr ctx else_
+      let thenCode ← lowerExprWithExn ctx exnTarget ctrlStack then_
+      let elseCode ← lowerExprWithExn ctx exnTarget ctrlStack else_
       pure (condCode ++ [IR.IRInstr.call RuntimeIdx.truthy, IR.IRInstr.if_ thenCode elseCode])
-  | .while_ cond body => do
-      let condCode ← lowerExpr ctx cond
-      let bodyCode ← lowerExpr ctx body
-      pure
-        [IR.IRInstr.block "while_exit"
-          [IR.IRInstr.loop "while_loop"
-            (condCode ++
-              [IR.IRInstr.call RuntimeIdx.truthy, IR.IRInstr.unOp .i32 "eqz",
-                IR.IRInstr.brIf "while_exit"] ++
-              bodyCode ++
-              [IR.IRInstr.drop, IR.IRInstr.br "while_loop"])]]
+  | .while_ cond body =>
+      lowerWhile ctx exnTarget ctrlStack none cond body
   | .throw arg => do
       let argCode ← lowerTrivialM ctx arg
-      pure (argCode ++ [IR.IRInstr.call RuntimeIdx.throwOp, IR.IRInstr.return_])
+      let transfer :=
+        match exnTarget with
+        | some lbl => [IR.IRInstr.br lbl]
+        | none => [IR.IRInstr.return_]
+      pure (argCode ++ [IR.IRInstr.call RuntimeIdx.throwOp] ++ transfer)
   | .tryCatch body _ catchBody finally_ => do
-      let bodyCode ← lowerExpr ctx body
-      let catchCode ← lowerExpr ctx catchBody
+      let catchLabel ← freshLabel "catch"
+      let doneLabel ← freshLabel "try_done"
+      let bodyCode ← lowerExprWithExn ctx (some catchLabel) ctrlStack body
+      let catchCode ← lowerExprWithExn ctx exnTarget ctrlStack catchBody
       let finallyCode ←
         match finally_ with
-        | some f => lowerExpr ctx f
+        | some f => lowerExprWithExn ctx exnTarget ctrlStack f
         | none => pure []
-      -- Exceptions are not modeled yet; preserve compilation by sequencing body/finally and
-      -- retaining catch code in-place for structural coverage without unresolved labels.
-      pure (bodyCode ++ [IR.IRInstr.drop] ++ catchCode ++ [IR.IRInstr.drop] ++ finallyCode)
+      let tryCatchCode : List IR.IRInstr :=
+        [IR.IRInstr.block doneLabel
+          ([IR.IRInstr.block catchLabel (bodyCode ++ [IR.IRInstr.br doneLabel])] ++ catchCode)]
+      pure (tryCatchCode ++ finallyCode)
   | .«return» arg =>
       match arg with
       | some v => do
@@ -333,12 +367,53 @@ private partial def lowerExpr (ctx : LowerCtx) : ANF.Expr → LowerM (List IR.IR
       let argCode ← lowerTrivialM ctx arg
       pure (argCode ++ [IR.IRInstr.call RuntimeIdx.awaitOp])
   | .labeled label body => do
-      let bodyCode ← lowerExpr ctx body
-      pure [IR.IRInstr.block label bodyCode]
+      match body with
+      | .while_ cond loopBody =>
+          lowerWhile ctx exnTarget ctrlStack (some label) cond loopBody
+      | _ => do
+          let exitLbl ← freshLabel s!"label_{label}"
+          let frame : CtrlFrame :=
+            { userLabel := some label
+              breakTarget := exitLbl
+              continueTarget := none
+              allowUnlabeledBreak := false
+              allowUnlabeledContinue := false }
+          let bodyCode ← lowerExprWithExn ctx exnTarget (frame :: ctrlStack) body
+          pure [IR.IRInstr.block exitLbl bodyCode]
   | .«break» label =>
-      pure [IR.IRInstr.br (label.getD "break")]
+      match lookupBreakTarget ctrlStack label with
+      | some target => pure [IR.IRInstr.br target]
+      | none => throw s!"lower: unresolved break target {label.getD "<unlabeled>"}"
   | .«continue» label =>
-      pure [IR.IRInstr.br (label.getD "continue")]
+      match lookupContinueTarget ctrlStack label with
+      | some target => pure [IR.IRInstr.br target]
+      | none => throw s!"lower: unresolved continue target {label.getD "<unlabeled>"}"
+
+private partial def lowerWhile (ctx : LowerCtx) (exnTarget : Option String) (ctrlStack : List CtrlFrame)
+    (userLabel : Option String) (cond body : ANF.Expr) : LowerM (List IR.IRInstr) := do
+  let exitLbl ← freshLabel "while_exit"
+  let loopLbl ← freshLabel "while_loop"
+  let frame : CtrlFrame :=
+    { userLabel := userLabel
+      breakTarget := exitLbl
+      continueTarget := some loopLbl
+      allowUnlabeledBreak := true
+      allowUnlabeledContinue := true }
+  let condCode ← lowerExprWithExn ctx exnTarget (frame :: ctrlStack) cond
+  let bodyCode ← lowerExprWithExn ctx exnTarget (frame :: ctrlStack) body
+  pure
+    [IR.IRInstr.block exitLbl
+      [IR.IRInstr.loop loopLbl
+        (condCode ++
+          [IR.IRInstr.call RuntimeIdx.truthy, IR.IRInstr.unOp .i32 "eqz",
+            IR.IRInstr.brIf exitLbl] ++
+          bodyCode ++
+          [IR.IRInstr.drop, IR.IRInstr.br loopLbl])]]
+
+end
+
+private partial def lowerExpr (ctx : LowerCtx) : ANF.Expr → LowerM (List IR.IRInstr) :=
+  lowerExprWithExn ctx none []
 
 private def mkInitialCtx (params : List ANF.VarName) (envParam : ANF.VarName) : LowerCtx :=
   let rec go (ps : List ANF.VarName) (idx : Nat) (acc : List (ANF.VarName × Nat)) :
@@ -352,7 +427,8 @@ private def mkInitialCtx (params : List ANF.VarName) (envParam : ANF.VarName) : 
 private def lowerFunction (f : ANF.FuncDef) : Except String IR.IRFunc := do
   let paramTypes := List.replicate (f.params.length + 1) IR.IRType.f64
   let initState : LowerState :=
-    { nextLocal := paramTypes.length, locals := #[], nextStringId := 0, strings := [] }
+    { nextLocal := paramTypes.length, locals := #[], nextStringId := 0, strings := []
+      nextLabelId := 0 }
   let ctx := mkInitialCtx f.params f.envParam
   let (body, st) ← (lowerExpr ctx f.body).run initState
   pure

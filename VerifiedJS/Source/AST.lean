@@ -1,9 +1,19 @@
+import Lean.LibrarySuggestions.Basic
+
 /-
   VerifiedJS — Full ECMAScript 2020 Abstract Syntax Tree
   SPEC: §11–15 (ECMAScript Language: Lexical Grammar, Expressions, Statements, Functions, Scripts and Modules)
 -/
 
 namespace VerifiedJS.Source
+
+run_cmd
+  Lean.modifyEnv fun env =>
+    Lean.LibrarySuggestions.moduleDenyListExt.addEntry env "VerifiedJS"
+
+run_cmd
+  Lean.modifyEnv fun env =>
+    Lean.LibrarySuggestions.nameDenyListExt.addEntry env "VerifiedJS"
 
 /-- ECMA-262 §12.1 Identifier Names and Identifiers -/
 abbrev Ident := String
