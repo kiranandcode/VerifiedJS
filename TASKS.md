@@ -75,3 +75,4 @@
 - [x] Implement ANF.Convert (JS.Flat → JS.ANF) — VALIDATED by supervisor 2026-03-08
 - [x] Implement Wasm.Lower (JS.ANF → Wasm.IR) — VALIDATED by supervisor 2026-03-08
 - [x] Define Flat.Semantics small-step LTS — VALIDATED by supervisor 2026-03-08
+- [x] Define Wasm.Semantics (port from WasmCert-Coq) — VALIDATED by supervisor 2026-03-08
