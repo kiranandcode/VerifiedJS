@@ -28,8 +28,8 @@ private def trivialOfFlatValue : Flat.Value → Except String Trivial
   | .bool b => .ok (.litBool b)
   | .number n => .ok (.litNum n)
   | .string s => .ok (.litStr s)
-  | .object _ => .error "ANF.convert: object heap literals are not representable in ANF.Trivial"
-  | .closure _ _ => .error "ANF.convert: closure literals are not representable in ANF.Trivial"
+  | .object addr => .ok (.litObject addr)
+  | .closure funcIdx envPtr => .ok (.litClosure funcIdx envPtr)
 
 mutual
 
@@ -58,22 +58,30 @@ private partial def normalizeExpr (e : Flat.Expr) (k : Trivial → ConvM Expr) :
       normalizeExpr envPtr (fun envTriv =>
         normalizeExprList args (fun argTrivs =>
           bindComplex (.call calleeTriv envTriv argTrivs) k)))
-  | .newObj _ _ _ =>
-    throw "ANF.convert: newObj has no ANF target form yet"
+  | .newObj funcIdx envPtr args =>
+    normalizeExpr funcIdx (fun calleeTriv =>
+      normalizeExpr envPtr (fun envTriv =>
+        normalizeExprList args (fun argTrivs =>
+          bindComplex (.newObj calleeTriv envTriv argTrivs) k)))
   | .getProp obj prop =>
     normalizeExpr obj (fun objTriv => bindComplex (.getProp objTriv prop) k)
   | .setProp obj prop value =>
     normalizeExpr obj (fun objTriv =>
       normalizeExpr value (fun valueTriv =>
         bindComplex (.setProp objTriv prop valueTriv) k))
-  | .getIndex _ _ =>
-    throw "ANF.convert: getIndex has no ANF target form yet"
-  | .setIndex _ _ _ =>
-    throw "ANF.convert: setIndex has no ANF target form yet"
-  | .deleteProp _ _ =>
-    throw "ANF.convert: deleteProp has no ANF target form yet"
-  | .typeof _ =>
-    throw "ANF.convert: typeof has no ANF target form yet"
+  | .getIndex obj idx =>
+    normalizeExpr obj (fun objTriv =>
+      normalizeExpr idx (fun idxTriv =>
+        bindComplex (.getIndex objTriv idxTriv) k))
+  | .setIndex obj idx value =>
+    normalizeExpr obj (fun objTriv =>
+      normalizeExpr idx (fun idxTriv =>
+        normalizeExpr value (fun valueTriv =>
+          bindComplex (.setIndex objTriv idxTriv valueTriv) k)))
+  | .deleteProp obj prop =>
+    normalizeExpr obj (fun objTriv => bindComplex (.deleteProp objTriv prop) k)
+  | .typeof arg =>
+    normalizeExpr arg (fun argTriv => bindComplex (.typeof argTriv) k)
   | .getEnv envPtr idx =>
     normalizeExpr envPtr (fun envTriv => bindComplex (.getEnv envTriv idx) k)
   | .makeEnv values =>
@@ -110,12 +118,14 @@ private partial def normalizeExpr (e : Flat.Expr) (k : Trivial → ConvM Expr) :
     match arg with
     | some value => normalizeExpr value (fun t => pure (.«return» (some t)))
     | none => pure (.«return» none)
-  | .yield _ _ =>
-    throw "ANF.convert: yield has no ANF target form yet"
-  | .await _ =>
-    throw "ANF.convert: await has no ANF target form yet"
+  | .yield arg delegate =>
+    match arg with
+    | some value => normalizeExpr value (fun t => pure (.yield (some t) delegate))
+    | none => pure (.yield none delegate)
+  | .await arg =>
+    normalizeExpr arg (fun argTriv => pure (.await argTriv))
   | .this =>
-    throw "ANF.convert: this has no ANF target form yet"
+    k (.var "this")
   | .unary op arg =>
     normalizeExpr arg (fun argTriv => bindComplex (.unary op argTriv) k)
   | .binary op lhs rhs =>

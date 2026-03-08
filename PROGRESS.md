@@ -8,7 +8,7 @@
 | Lexer/Parser | partial | N/A | N/A | N/A | baseline (single-token expr + tokenization) | N/A |
 | Core | defined | defined | stub | stub | Elaborate: stub | stub |
 | Flat | defined | stub | stub | stub | ClosureConvert: stub | stub |
-| ANF | stub | stub | stub | stub | Convert: implemented (partial coverage), Optimize: done (identity) | OptimizeCorrect: done |
+| ANF | partial | stub | stub | stub | Convert: implemented (full Flat.Expr coverage), Optimize: done (identity) | OptimizeCorrect: done |
 | Wasm.IR | stub | N/A | stub | stub | Lower: stub | stub |
 | Wasm.AST | defined | stub | stub | stub | Emit: stub, Binary: stub | stub |
 

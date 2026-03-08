@@ -13,7 +13,7 @@
 - [ ] Make test suite check core elaboration
 - [ ] Implement Flat.ClosureConvert (JS.Core → JS.Flat)
 - [ ] Make test suite check for flat closure conversion
-- [ ] Implement ANF.Convert (JS.Flat → JS.ANF) — TODO(supervisor): `VerifiedJS/ANF/Convert.lean` still has explicit unimplemented cases (`newObj/getIndex/setIndex/deleteProp/typeof/yield/await/this` and unsupported object/closure literals), so add conversions for every `Flat.Expr` variant or extend `ANF.Sy
+- [x] Implement ANF.Convert (JS.Flat → JS.ANF) — TODO(supervisor): `VerifiedJS/ANF/Convert.lean` still has explicit unimplemented cases (`newObj/getIndex/setIndex/deleteProp/typeof/yield/await/this` and unsupported object/closure literals), so add conversions for every `Flat.Expr` variant or extend `ANF.Sy
 - [ ] Make test suite check for ANF conversion
 - [ ] Implement Wasm.Lower (JS.ANF → Wasm.IR)
 - [ ] Make test suite check for WASM lowering

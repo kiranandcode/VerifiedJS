@@ -28,6 +28,8 @@ inductive Trivial where
   | litBool (b : Bool)
   | litNum (n : Float)
   | litStr (s : String)
+  | litObject (addr : Nat)
+  | litClosure (funcIdx : FuncIdx) (envPtr : Nat)
   deriving Repr, BEq
 
 mutual
@@ -42,6 +44,8 @@ inductive Expr where
   | throw (arg : Trivial)
   | tryCatch (body : Expr) (catchParam : VarName) (catchBody : Expr) (finally_ : Option Expr)
   | «return» (arg : Option Trivial)
+  | yield (arg : Option Trivial) (delegate : Bool)
+  | await (arg : Trivial)
   | labeled (label : String) (body : Expr)
   | «break» (label : Option String)
   | «continue» (label : Option String)
@@ -52,8 +56,13 @@ inductive ComplexExpr where
   | trivial (t : Trivial)
   | assign (name : VarName) (value : Trivial)
   | call (callee : Trivial) (env : Trivial) (args : List Trivial)
+  | newObj (callee : Trivial) (env : Trivial) (args : List Trivial)
   | getProp (obj : Trivial) (prop : PropName)
   | setProp (obj : Trivial) (prop : PropName) (value : Trivial)
+  | getIndex (obj : Trivial) (idx : Trivial)
+  | setIndex (obj : Trivial) (idx : Trivial) (value : Trivial)
+  | deleteProp (obj : Trivial) (prop : PropName)
+  | typeof (arg : Trivial)
   | getEnv (env : Trivial) (idx : EnvSlot)
   | makeEnv (values : List Trivial)
   | makeClosure (funcIdx : FuncIdx) (env : Trivial)
