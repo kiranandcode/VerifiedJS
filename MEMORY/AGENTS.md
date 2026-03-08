@@ -53,3 +53,8 @@ Template:
   Symptom: Lean API mismatches (`Array.get?`, `UInt32/UInt64` nat-shift/rotate methods, and proof-style `ByteArray.set`) caused cascading compile failures.
   Fix: Use supported idioms in this toolchain: `arr[idx]?`, `set!` for byte writes, and arithmetic fallbacks instead of unavailable nat-shift/rotate helpers.
   Guardrail: Before adding low-level numeric/memory helpers, probe exact available APIs in this Lean version and prefer the local pattern used elsewhere in the repo.
+
+- [2026-03-08] Context: `VerifiedJS/Runtime/Values.lean`
+  Symptom: `rfl` failed on float encoding examples because `encodeNumber` branches on `Float.isNaN`, which does not always reduce definitionally for literals.
+  Fix: Use round-trip examples on tagged values or prove float cases via explicit lemmas/tactics instead of bare `rfl`.
+  Guardrail: Avoid `rfl` proofs that depend on normalizing floating-point predicates (`isNaN`/`isFinite`) in conditionals.

@@ -26,7 +26,7 @@
 - [ ] Compose EndToEnd.lean
 
 ## Priority 4 (runtime)
-- [ ] Implement Runtime.Values (NaN-boxing)
+- [x] Implement Runtime.Values (NaN-boxing)
 - [ ] Implement Runtime.GC (mark-sweep in Wasm)
 - [ ] Implement Runtime.Objects (property maps in linear memory)
 - [ ] Implement Runtime.Strings (interned UTF-16)
