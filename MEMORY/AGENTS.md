@@ -28,3 +28,8 @@ Template:
   Symptom: Passing a Lean source file path as the output argument overwrote the source file with build logs.
   Fix: Restore the file from `git show HEAD:<path> > <path>` and avoid targeting tracked source paths for diagnostics output.
   Guardrail: Run diagnostics with default output behavior or an explicit log path under `test_logs/`/`/tmp`.
+
+- [2026-03-08] Context: `VerifiedJS/Core/Semantics.lean`
+  Symptom: Lean failed on recursive `Env` definitions with termination goals (`sizeOf p < sizeOf env`) and stdlib mismatches (`Array.get?`, `String.toFloat?`, `Int.ofFloat` not available as used).
+  Fix: Flattened `Env` to non-recursive bindings and constrained semantics helpers to APIs known in this codebase.
+  Guardrail: Prefer minimal, compile-checked primitives first; only introduce recursive records or numeric/string conversions after confirming exact Lean API names in this toolchain.
