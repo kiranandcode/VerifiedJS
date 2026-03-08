@@ -30,7 +30,7 @@
 
 ## Priority 3 (proof work)
 - [x] Define Flat.Semantics small-step LTS — TODO(supervisor): Replace the `getEnv` placeholder error with real heap environment lookup semantics in `VerifiedJS/Flat/Semantics.lean`.
-- [x] Define ANF.Semantics small-step LTS — TODO(supervisor): Add a `Validated Completed (Supervisor)` entry for “Define ANF.Semantics small-step LTS” in `TASKS.md` after running the validation workflow.; Add a `Validated Completed (Supervisor)` entry for “Define ANF.Semantics small-step LTS” in `TASK
+- [x] Define ANF.Semantics small-step LTS
 - [x] Define Wasm.Semantics (port from WasmCert-Coq) — TODO(supervisor): Run the supervisor validation workflow and add “Define Wasm.Semantics (port from WasmCert-Coq)” to the `Validated Completed (Supervisor)` section in `TASKS.md`. — TODO(supervisor): agent merged code but did not mark task as [x] for supervisor validation
 - [ ] Prove ElaborateCorrect.lean
 - [ ] Prove ClosureConvertCorrect.lean
@@ -75,4 +75,5 @@
 - [x] Implement ANF.Convert (JS.Flat → JS.ANF) — VALIDATED by supervisor 2026-03-08
 - [x] Implement Wasm.Lower (JS.ANF → Wasm.IR) — VALIDATED by supervisor 2026-03-08
 - [x] Define Flat.Semantics small-step LTS — VALIDATED by supervisor 2026-03-08
+- [x] Define ANF.Semantics small-step LTS — VALIDATED by supervisor 2026-03-08
 - [x] Define Wasm.Semantics (port from WasmCert-Coq) — VALIDATED by supervisor 2026-03-08

@@ -28,5 +28,5 @@
 - Sorry count: TBD (run `./scripts/sorry_report.sh`)
 - Test262 pass rate: N/A
 - Unit tests: N/A
-- 2026-03-08: `Define ANF.Semantics small-step LTS` completed in `VerifiedJS/ANF/Semantics.lean` (task marked done in `TASKS.md`; supervisor validation move pending)
+- 2026-03-08: `Define ANF.Semantics small-step LTS` completed in `VerifiedJS/ANF/Semantics.lean` (`Step`/`Steps`/`Behaves` wired and task validated by supervisor in `TASKS.md`)
 - 2026-03-08: `Define Wasm.Semantics (port from WasmCert-Coq)` completed in `VerifiedJS/Wasm/Semantics.lean` (implemented concrete branches for `br*`, `call_indirect`, memory loads/stores, conversion/reinterpret op families, and bulk/table ops; validated in `TASKS.md`)
