@@ -23,3 +23,8 @@ Template:
 - Remove or rewrite tips that are vague, duplicated, or no longer useful.
 - Keep only tips that have been useful at least twice or are high-impact.
 - During cleanup, prefer fewer strong rules over many weak rules.
+
+- [2026-03-08] Context: `scripts/lsp_diagnostics.py`
+  Symptom: Passing a Lean source file path as the output argument overwrote the source file with build logs.
+  Fix: Restore the file from `git show HEAD:<path> > <path>` and avoid targeting tracked source paths for diagnostics output.
+  Guardrail: Run diagnostics with default output behavior or an explicit log path under `test_logs/`/`/tmp`.

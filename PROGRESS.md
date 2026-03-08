@@ -7,7 +7,7 @@
 | Source (AST) | partial | N/A | N/A | baseline | N/A | N/A |
 | Lexer/Parser | partial | N/A | N/A | N/A | baseline (single-token expr + tokenization) | N/A |
 | Core | defined | stub | stub | stub | Elaborate: stub | stub |
-| Flat | stub | stub | stub | stub | ClosureConvert: stub | stub |
+| Flat | defined | stub | stub | stub | ClosureConvert: stub | stub |
 | ANF | stub | stub | stub | stub | Convert: stub, Optimize: done (identity) | OptimizeCorrect: done |
 | Wasm.IR | stub | N/A | stub | stub | Lower: stub | stub |
 | Wasm.AST | stub | stub | stub | stub | Emit: stub, Binary: stub | stub |

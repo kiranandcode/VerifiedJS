@@ -7,6 +7,15 @@ import VerifiedJS.Core.Syntax
 
 namespace VerifiedJS.Flat
 
+/-- ECMA-262 §6.2.5 language binding names reused from Core. -/
+abbrev VarName := Core.VarName
+
+/-- ECMA-262 §6.1.7 property key names reused from Core. -/
+abbrev PropName := Core.PropName
+
+/-- ECMA-262 §13.13 label names reused from Core. -/
+abbrev LabelName := Core.LabelName
+
 /-- Function index in the global function table. -/
 abbrev FuncIdx := Nat
 
@@ -30,30 +39,30 @@ Closure conversion eliminates nested function values into closure pairs.
 -/
 inductive Expr where
   | lit (v : Value)
-  | var (name : String)
-  | «let» (name : String) (init : Expr) (body : Expr)
-  | assign (name : String) (value : Expr)
+  | var (name : VarName)
+  | «let» (name : VarName) (init : Expr) (body : Expr)
+  | assign (name : VarName) (value : Expr)
   | «if» (cond : Expr) (then_ : Expr) (else_ : Expr)
   | seq (a b : Expr)
   | call (funcIdx : Expr) (envPtr : Expr) (args : List Expr)
   | newObj (funcIdx : Expr) (envPtr : Expr) (args : List Expr)
-  | getProp (obj : Expr) (prop : String)
-  | setProp (obj : Expr) (prop : String) (value : Expr)
+  | getProp (obj : Expr) (prop : PropName)
+  | setProp (obj : Expr) (prop : PropName) (value : Expr)
   | getIndex (obj : Expr) (idx : Expr)
   | setIndex (obj : Expr) (idx : Expr) (value : Expr)
-  | deleteProp (obj : Expr) (prop : String)
+  | deleteProp (obj : Expr) (prop : PropName)
   | typeof (arg : Expr)
   | getEnv (envPtr : Expr) (idx : Nat)
   | makeEnv (values : List Expr)
   | makeClosure (funcIdx : FuncIdx) (env : Expr)
-  | objectLit (props : List (String × Expr))
+  | objectLit (props : List (PropName × Expr))
   | arrayLit (elems : List Expr)
   | throw (arg : Expr)
-  | tryCatch (body : Expr) (catchParam : String) (catchBody : Expr) (finally_ : Option Expr)
+  | tryCatch (body : Expr) (catchParam : VarName) (catchBody : Expr) (finally_ : Option Expr)
   | while_ (cond : Expr) (body : Expr)
-  | «break» (label : Option String)
-  | «continue» (label : Option String)
-  | labeled (label : String) (body : Expr)
+  | «break» (label : Option LabelName)
+  | «continue» (label : Option LabelName)
+  | labeled (label : LabelName) (body : Expr)
   | «return» (arg : Option Expr)
   | yield (arg : Option Expr) (delegate : Bool)
   | await (arg : Expr)
@@ -64,9 +73,9 @@ inductive Expr where
 
 /-- ECMA-262 §10.2 ECMAScript Function Objects (closure-converted form). -/
 structure FuncDef where
-  name : String
-  params : List String
-  envParam : String
+  name : VarName
+  params : List VarName
+  envParam : VarName
   body : Expr
   deriving Repr, BEq
 

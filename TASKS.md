@@ -3,7 +3,7 @@
 ## Priority 1 (blocking — foundations)
 - [ ] Parser milestone: parse ≥95% of JS files selected by `scripts/parse_flagship.sh --full` (current: 86.79% = 1781/2052 on 2026-03-08) — TODO(supervisor): raise parse_flagship pass-rate to >=0.95 before re-validation
 - [ ] Define JS.Core.Semantics small-step LTS
-- [ ] Define JS.Flat.Syntax inductive types
+- [x] Define JS.Flat.Syntax inductive types
 - [ ] Define JS.ANF.Syntax inductive types
 - [ ] Define Wasm.Syntax (port from WasmCert-Coq)
 
