@@ -32,6 +32,24 @@ def arrayLit : RuntimeFuncIdx := 12
 def throwOp : RuntimeFuncIdx := 13
 def yieldOp : RuntimeFuncIdx := 14
 def awaitOp : RuntimeFuncIdx := 15
+def toNumber : RuntimeFuncIdx := 16
+def encodeNumber : RuntimeFuncIdx := 17
+def truthy : RuntimeFuncIdx := 18
+def encodeBool : RuntimeFuncIdx := 19
+def unaryNeg : RuntimeFuncIdx := 20
+def unaryPos : RuntimeFuncIdx := 21
+def unaryLogNot : RuntimeFuncIdx := 22
+def binaryAdd : RuntimeFuncIdx := 23
+def binarySub : RuntimeFuncIdx := 24
+def binaryMul : RuntimeFuncIdx := 25
+def binaryDiv : RuntimeFuncIdx := 26
+def binaryMod : RuntimeFuncIdx := 27
+def binaryLt : RuntimeFuncIdx := 28
+def binaryGt : RuntimeFuncIdx := 29
+def binaryLe : RuntimeFuncIdx := 30
+def binaryGe : RuntimeFuncIdx := 31
+def binaryEq : RuntimeFuncIdx := 32
+def binaryNeq : RuntimeFuncIdx := 33
 
 end RuntimeIdx
 
@@ -123,13 +141,34 @@ private def lowerBinOp : Core.BinOp → String
   | .instanceof => "instanceof"
   | .in => "in"
 
+private def lowerUnaryRuntime? : Core.UnaryOp → Option RuntimeFuncIdx
+  | .neg => some RuntimeIdx.unaryNeg
+  | .pos => some RuntimeIdx.unaryPos
+  | .logNot => some RuntimeIdx.unaryLogNot
+  | _ => none
+
+private def lowerBinaryRuntime? : Core.BinOp → Option RuntimeFuncIdx
+  | .add => some RuntimeIdx.binaryAdd
+  | .sub => some RuntimeIdx.binarySub
+  | .mul => some RuntimeIdx.binaryMul
+  | .div => some RuntimeIdx.binaryDiv
+  | .mod => some RuntimeIdx.binaryMod
+  | .lt => some RuntimeIdx.binaryLt
+  | .gt => some RuntimeIdx.binaryGt
+  | .le => some RuntimeIdx.binaryLe
+  | .ge => some RuntimeIdx.binaryGe
+  | .eq | .strictEq => some RuntimeIdx.binaryEq
+  | .neq | .strictNeq => some RuntimeIdx.binaryNeq
+  | _ => none
+
 private def drops (n : Nat) : List IR.IRInstr :=
   List.replicate n IR.IRInstr.drop
 
-private def lowerTrivial (ctx : LowerCtx) : ANF.Trivial → Except String (List IR.IRInstr)
-  | .var name => do
-      let idx ← lookupLocal ctx name
-      pure [IR.IRInstr.localGet idx]
+private def lowerTrivial (ctx : LowerCtx) : ANF.Trivial → LowerM (List IR.IRInstr)
+  | .var name =>
+      match lookupLocal ctx name with
+      | .ok idx => pure [IR.IRInstr.localGet idx]
+      | .error err => throw err
   -- JS values are carried as NaN-boxed bit patterns reinterpreted as f64.
   | .litNull => pure [mkBoxedConst encodeNullBox]
   | .litUndefined => pure [mkBoxedConst encodeUndefinedBox]
@@ -143,9 +182,7 @@ private def lowerTrivial (ctx : LowerCtx) : ANF.Trivial → Except String (List 
       pure [mkBoxedConst (Runtime.NanBoxed.encodeObjectRef (funcIdx * 65536 + envPtr))]
 
 private def lowerTrivialM (ctx : LowerCtx) (t : ANF.Trivial) : LowerM (List IR.IRInstr) :=
-  match lowerTrivial ctx t with
-  | .ok code => pure code
-  | .error err => throw err
+  lowerTrivial ctx t
 
 private def lowerTrivialList (ctx : LowerCtx) (ts : List ANF.Trivial) : LowerM (List IR.IRInstr) := do
   let mut out := []
@@ -225,11 +262,15 @@ private partial def lowerComplex (ctx : LowerCtx) : ANF.ComplexExpr → LowerM (
       pure (elemsCode ++ drops elems.length ++ [IR.IRInstr.call RuntimeIdx.arrayLit])
   | .unary op arg => do
       let argCode ← lowerTrivialM ctx arg
-      pure (argCode ++ [IR.IRInstr.unOp .f64 (lowerUnaryOp op)])
+      match lowerUnaryRuntime? op with
+      | some fn => pure (argCode ++ [IR.IRInstr.call fn])
+      | none => pure (argCode ++ [IR.IRInstr.unOp .f64 (lowerUnaryOp op)])
   | .binary op lhs rhs => do
       let lhsCode ← lowerTrivialM ctx lhs
       let rhsCode ← lowerTrivialM ctx rhs
-      pure (lhsCode ++ rhsCode ++ [IR.IRInstr.binOp .f64 (lowerBinOp op)])
+      match lowerBinaryRuntime? op with
+      | some fn => pure (lhsCode ++ rhsCode ++ [IR.IRInstr.call fn])
+      | none => pure (lhsCode ++ rhsCode ++ [IR.IRInstr.binOp .f64 (lowerBinOp op)])
 
 private partial def lowerExpr (ctx : LowerCtx) : ANF.Expr → LowerM (List IR.IRInstr)
   | .trivial t => lowerTrivialM ctx t
@@ -246,7 +287,7 @@ private partial def lowerExpr (ctx : LowerCtx) : ANF.Expr → LowerM (List IR.IR
       let condCode ← lowerTrivialM ctx cond
       let thenCode ← lowerExpr ctx then_
       let elseCode ← lowerExpr ctx else_
-      pure (condCode ++ [IR.IRInstr.unOp .f64 "truthy", IR.IRInstr.if_ thenCode elseCode])
+      pure (condCode ++ [IR.IRInstr.call RuntimeIdx.truthy, IR.IRInstr.if_ thenCode elseCode])
   | .while_ cond body => do
       let condCode ← lowerExpr ctx cond
       let bodyCode ← lowerExpr ctx body
@@ -254,7 +295,7 @@ private partial def lowerExpr (ctx : LowerCtx) : ANF.Expr → LowerM (List IR.IR
         [IR.IRInstr.block "while_exit"
           [IR.IRInstr.loop "while_loop"
             (condCode ++
-              [IR.IRInstr.unOp .f64 "truthy", IR.IRInstr.unOp .i32 "eqz",
+              [IR.IRInstr.call RuntimeIdx.truthy, IR.IRInstr.unOp .i32 "eqz",
                 IR.IRInstr.brIf "while_exit"] ++
               bodyCode ++
               [IR.IRInstr.drop, IR.IRInstr.br "while_loop"])]]
@@ -308,7 +349,8 @@ private def mkInitialCtx (params : List ANF.VarName) (envParam : ANF.VarName) : 
 
 private def lowerFunction (f : ANF.FuncDef) : Except String IR.IRFunc := do
   let paramTypes := List.replicate (f.params.length + 1) IR.IRType.f64
-  let initState : LowerState := { nextLocal := paramTypes.length, locals := #[] }
+  let initState : LowerState :=
+    { nextLocal := paramTypes.length, locals := #[], nextStringId := 0, strings := [] }
   let ctx := mkInitialCtx f.params f.envParam
   let (body, st) ← (lowerExpr ctx f.body).run initState
   pure
@@ -363,6 +405,203 @@ private def runtimeHelpers : Array IR.IRFunc :=
       body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] },
     { name := "__rt_await", params := [.f64], results := [.f64], locals := []
       body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_toNumber", params := [.f64], results := [.f64], locals := [.i64, .i64]
+      body :=
+        [ IR.IRInstr.localGet 0
+        , IR.IRInstr.unOp .i64 "reinterpret_f64"
+        , IR.IRInstr.localSet 1
+        , IR.IRInstr.localGet 1
+        , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.nanMask.toNat}"
+        , IR.IRInstr.binOp .i64 "and"
+        , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.nanMask.toNat}"
+        , IR.IRInstr.binOp .i64 "eq"
+        , IR.IRInstr.if_
+            [ IR.IRInstr.localGet 1
+            , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.tagMask.toNat}"
+            , IR.IRInstr.binOp .i64 "and"
+            , IR.IRInstr.localSet 2
+            , IR.IRInstr.localGet 2
+            , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.tagNull.toNat}"
+            , IR.IRInstr.binOp .i64 "eq"
+            , IR.IRInstr.if_
+                [IR.IRInstr.const_ .f64 "0.0"]
+                [ IR.IRInstr.localGet 2
+                , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.tagUndefined.toNat}"
+                , IR.IRInstr.binOp .i64 "eq"
+                , IR.IRInstr.if_
+                    [mkBoxedConst (Runtime.NanBoxed.encodeNumber (0.0 / 0.0))]
+                    [ IR.IRInstr.localGet 2
+                    , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.tagBool.toNat}"
+                    , IR.IRInstr.binOp .i64 "eq"
+                    , IR.IRInstr.if_
+                        [ IR.IRInstr.localGet 1
+                        , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.payloadMask.toNat}"
+                        , IR.IRInstr.binOp .i64 "and"
+                        , IR.IRInstr.unOp .i64 "eqz"
+                        , IR.IRInstr.unOp .i32 "eqz"
+                        , IR.IRInstr.if_ [IR.IRInstr.const_ .f64 "1.0"] [IR.IRInstr.const_ .f64 "0.0"] ]
+                        [ IR.IRInstr.localGet 2
+                        , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.tagInt32.toNat}"
+                        , IR.IRInstr.binOp .i64 "eq"
+                        , IR.IRInstr.if_
+                            [ IR.IRInstr.localGet 1
+                            , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.payloadMask.toNat}"
+                            , IR.IRInstr.binOp .i64 "and"
+                            , IR.IRInstr.unOp .i32 "wrap_i64"
+                            , IR.IRInstr.unOp .f64 "convert_i32_s" ]
+                            [mkBoxedConst (Runtime.NanBoxed.encodeNumber (0.0 / 0.0))] ] ] ] ]
+            [IR.IRInstr.localGet 0]
+        , IR.IRInstr.return_ ] }
+    ,
+    { name := "__rt_encodeNumber", params := [.f64], results := [.f64], locals := []
+      body :=
+        [ IR.IRInstr.localGet 0
+        , IR.IRInstr.localGet 0
+        , IR.IRInstr.binOp .f64 "raw_eq"
+        , IR.IRInstr.if_
+            [IR.IRInstr.localGet 0]
+            [mkBoxedConst (Runtime.NanBoxed.encodeNumber (0.0 / 0.0))]
+        , IR.IRInstr.return_ ] }
+    ,
+    { name := "__rt_truthy", params := [.f64], results := [.i32], locals := [.i64, .i64]
+      body :=
+        [ IR.IRInstr.localGet 0
+        , IR.IRInstr.unOp .i64 "reinterpret_f64"
+        , IR.IRInstr.localSet 1
+        , IR.IRInstr.localGet 1
+        , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.nanMask.toNat}"
+        , IR.IRInstr.binOp .i64 "and"
+        , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.nanMask.toNat}"
+        , IR.IRInstr.binOp .i64 "eq"
+        , IR.IRInstr.if_
+            [ IR.IRInstr.localGet 1
+            , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.tagMask.toNat}"
+            , IR.IRInstr.binOp .i64 "and"
+            , IR.IRInstr.localSet 2
+            , IR.IRInstr.localGet 2
+            , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.tagNull.toNat}"
+            , IR.IRInstr.binOp .i64 "eq"
+            , IR.IRInstr.if_
+                [IR.IRInstr.const_ .i32 "0"]
+                [ IR.IRInstr.localGet 2
+                , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.tagUndefined.toNat}"
+                , IR.IRInstr.binOp .i64 "eq"
+                , IR.IRInstr.if_
+                    [IR.IRInstr.const_ .i32 "0"]
+                    [ IR.IRInstr.localGet 2
+                    , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.tagBool.toNat}"
+                    , IR.IRInstr.binOp .i64 "eq"
+                    , IR.IRInstr.if_
+                        [ IR.IRInstr.localGet 1
+                        , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.payloadMask.toNat}"
+                        , IR.IRInstr.binOp .i64 "and"
+                        , IR.IRInstr.unOp .i64 "eqz"
+                        , IR.IRInstr.unOp .i32 "eqz" ]
+                        [ IR.IRInstr.localGet 2
+                        , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.tagInt32.toNat}"
+                        , IR.IRInstr.binOp .i64 "eq"
+                        , IR.IRInstr.if_
+                            [ IR.IRInstr.localGet 1
+                            , IR.IRInstr.const_ .i64 s!"{Runtime.NanBoxed.payloadMask.toNat}"
+                            , IR.IRInstr.binOp .i64 "and"
+                            , IR.IRInstr.unOp .i64 "eqz"
+                            , IR.IRInstr.unOp .i32 "eqz" ]
+                            [IR.IRInstr.const_ .i32 "1"] ] ] ] ]
+            [ IR.IRInstr.localGet 0
+            , IR.IRInstr.localGet 0
+            , IR.IRInstr.binOp .f64 "raw_eq"
+            , IR.IRInstr.localGet 0
+            , IR.IRInstr.const_ .f64 "0.0"
+            , IR.IRInstr.binOp .f64 "raw_ne"
+            , IR.IRInstr.binOp .i32 "and" ]
+        , IR.IRInstr.return_ ] }
+    ,
+    { name := "__rt_encodeBool", params := [.i32], results := [.f64], locals := []
+      body :=
+        [ IR.IRInstr.localGet 0
+        , IR.IRInstr.if_
+            [mkBoxedConst (encodeBoolBox true)]
+            [mkBoxedConst (encodeBoolBox false)]
+        , IR.IRInstr.return_ ] }
+    ,
+    { name := "__rt_unaryNeg", params := [.f64], results := [.f64], locals := []
+      body :=
+        [ IR.IRInstr.localGet 0
+        , IR.IRInstr.call RuntimeIdx.toNumber
+        , IR.IRInstr.unOp .f64 "neg_raw"
+        , IR.IRInstr.call RuntimeIdx.encodeNumber
+        , IR.IRInstr.return_ ] }
+    ,
+    { name := "__rt_unaryPos", params := [.f64], results := [.f64], locals := []
+      body :=
+        [ IR.IRInstr.localGet 0
+        , IR.IRInstr.call RuntimeIdx.toNumber
+        , IR.IRInstr.call RuntimeIdx.encodeNumber
+        , IR.IRInstr.return_ ] }
+    ,
+    { name := "__rt_unaryLogNot", params := [.f64], results := [.f64], locals := []
+      body :=
+        [ IR.IRInstr.localGet 0
+        , IR.IRInstr.call RuntimeIdx.truthy
+        , IR.IRInstr.unOp .i32 "eqz"
+        , IR.IRInstr.call RuntimeIdx.encodeBool
+        , IR.IRInstr.return_ ] }
+    ,
+    { name := "__rt_binaryAdd", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "add_raw",
+        IR.IRInstr.call RuntimeIdx.encodeNumber, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_binarySub", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "sub_raw",
+        IR.IRInstr.call RuntimeIdx.encodeNumber, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_binaryMul", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "mul_raw",
+        IR.IRInstr.call RuntimeIdx.encodeNumber, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_binaryDiv", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "div_raw",
+        IR.IRInstr.call RuntimeIdx.encodeNumber, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_binaryMod", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "mod_raw",
+        IR.IRInstr.call RuntimeIdx.encodeNumber, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_binaryLt", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "raw_lt",
+        IR.IRInstr.call RuntimeIdx.encodeBool, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_binaryGt", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "raw_gt",
+        IR.IRInstr.call RuntimeIdx.encodeBool, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_binaryLe", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "raw_le",
+        IR.IRInstr.call RuntimeIdx.encodeBool, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_binaryGe", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "raw_ge",
+        IR.IRInstr.call RuntimeIdx.encodeBool, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_binaryEq", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "raw_eq",
+        IR.IRInstr.call RuntimeIdx.encodeBool, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_binaryNeq", params := [.f64, .f64], results := [.f64], locals := []
+      body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
+        IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "raw_ne",
+        IR.IRInstr.call RuntimeIdx.encodeBool, IR.IRInstr.return_] }
   ]
 
 /-- Lower an ANF program to Wasm IR. ECMA-262 runtime behavior is preserved structurally via ANF sequencing (§13). -/

@@ -131,6 +131,9 @@ private partial def emitInstr (s : EmitState) : IR.IRInstr → Except String (Li
 where
   emitI32BinOp (op : String) : Instr :=
     match op with
+    | "and" => .i32And
+    | "or" => .i32Or
+    | "xor" => .i32Xor
     | "add" => .i32Add | "sub" => .i32Sub | "mul" => .i32Mul
     | "div" => .i32DivS | "mod" => .i32RemS
     | "bit_and" => .i32And | "bit_or" => .i32Or | "bit_xor" => .i32Xor
@@ -141,6 +144,18 @@ where
 
   emitI64BinOp (op : String) : Instr :=
     match op with
+    | "and" => .i64And
+    | "or" => .i64Or
+    | "xor" => .i64Xor
+    | "shl" => .i64Shl
+    | "shr_s" => .i64ShrS
+    | "shr_u" => .i64ShrU
+    | "eq" => .i64Eq
+    | "neq" => .i64Ne
+    | "lt" => .i64Lts
+    | "gt" => .i64Gts
+    | "le" => .i64Les
+    | "ge" => .i64Ges
     | "add" => .i64Add | "sub" => .i64Sub | "mul" => .i64Mul
     | "div" => .i64DivS | "mod" => .i64RemS
     | _ => .nop
@@ -152,6 +167,17 @@ where
     | "mul" => [.f64Mul]
     | "div" => [.f64Div]
     | "mod" => [.f64Div]
+    | "add_raw" => [.f64Add]
+    | "sub_raw" => [.f64Sub]
+    | "mul_raw" => [.f64Mul]
+    | "div_raw" => [.f64Div]
+    | "mod_raw" => [.f64Div]
+    | "raw_eq" => [.f64Eq]
+    | "raw_ne" => [.f64Ne]
+    | "raw_lt" => [.f64Lt]
+    | "raw_gt" => [.f64Gt]
+    | "raw_le" => [.f64Le]
+    | "raw_ge" => [.f64Ge]
     -- Comparisons are boxed back into f64 (0.0/1.0) for uniform JS value representation.
     | "eq" | "strict_eq" => [.f64Eq, .f64ConvertI32u]
     | "neq" | "strict_neq" => [.f64Ne, .f64ConvertI32u]
@@ -171,6 +197,7 @@ where
   emitI32UnOp (op : String) : List Instr :=
     match op with
     | "eqz" => [.i32Eqz]
+    | "wrap_i64" => [.i32WrapI64]
     | "neg" => [.i32Const 0, .i32Sub]  -- i32 neg via 0 - x (swap needed)
     | "bit_not" => [.i32Const (UInt32.ofNat 0xFFFFFFFF), .i32Xor]
     | "log_not" => [.i32Eqz]
@@ -179,12 +206,16 @@ where
   emitI64UnOp (op : String) : List Instr :=
     match op with
     | "eqz" => [.i64Eqz]
+    | "reinterpret_f64" => [.i64ReinterpretF64]
     | _ => [.nop]
 
   emitF64UnOp (op : String) : List Instr :=
     match op with
     | "neg" => [.f64Neg]
+    | "neg_raw" => [.f64Neg]
     | "abs" => [.f64Abs]
+    | "convert_i32_s" => [.f64ConvertI32s]
+    | "reinterpret_i64" => [.f64ReinterpretI64]
     | "pos" => [.nop]
     | "log_not" => [.f64Const 0.0, .f64Eq, .f64ConvertI32u]
     | "truthy" => [.f64Const 0.0, .f64Ne]
