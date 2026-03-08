@@ -18,7 +18,6 @@
 - [ ] Implement Wasm.Emit (Wasm.IR → Wasm.AST)
 - [ ] Make test suite check for WASM emitting
 - [ ] Implement Wasm.Binary (Wasm.AST → .wasm)
-- [x] Write Core.Interp reference interpreter
 - [ ] Write Flat.Interp reference interpreter
 - [ ] Write ANF.Interp reference interpreter
 - [ ] Write Wasm.IR.Interp reference interpreter
@@ -77,3 +76,4 @@
 - [x] Define Flat.Semantics small-step LTS — VALIDATED by supervisor 2026-03-08
 - [x] Define ANF.Semantics small-step LTS — VALIDATED by supervisor 2026-03-08
 - [x] Define Wasm.Semantics (port from WasmCert-Coq) — VALIDATED by supervisor 2026-03-08
+- [x] Write Core.Interp reference interpreter — VALIDATED by supervisor 2026-03-08
