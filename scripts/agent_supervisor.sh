@@ -223,6 +223,9 @@ mark_task_done() {
 
 mark_task_pending_merge() {
   local task_id="$1"
+  local branch="${2:-}"
+  local wt="${3:-}"
+  local log_path="${4:-}"
   local lock_path="${LOCK_DIR}/${task_id}"
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     return 0
@@ -231,6 +234,102 @@ mark_task_pending_merge() {
     sed -i.bak 's/^status=.*/status=pending_merge/' "${lock_path}/meta.txt" 2>/dev/null || true
     rm -f "${lock_path}/meta.txt.bak" 2>/dev/null || true
     echo "pending_merge_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${lock_path}/meta.txt"
+    [[ -n "${branch}" ]] && echo "branch=${branch}" >> "${lock_path}/meta.txt"
+    [[ -n "${wt}" ]] && echo "worktree=${wt}" >> "${lock_path}/meta.txt"
+    [[ -n "${log_path}" ]] && echo "agent_log=${log_path}" >> "${lock_path}/meta.txt"
+  fi
+}
+
+read_lock_meta_value() {
+  local lock_path="$1"
+  local key="$2"
+  sed -nE "s/^${key}=(.*)$/\\1/p" "${lock_path}/meta.txt" | tail -n1
+}
+
+set_lock_status() {
+  local task_id="$1"
+  local status="$2"
+  local lock_path="${LOCK_DIR}/${task_id}"
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -f "${lock_path}/meta.txt" ]]; then
+    sed -i.bak "s/^status=.*/status=${status}/" "${lock_path}/meta.txt" 2>/dev/null || true
+    rm -f "${lock_path}/meta.txt.bak" 2>/dev/null || true
+    echo "${status}_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${lock_path}/meta.txt"
+  fi
+}
+
+merge_pending_branch_at_start() {
+  local task_id="$1"
+  local branch="$2"
+  local log="${LOG_ROOT}/pending_merge_${task_id}_$(timestamp).log"
+
+  echo "STARTUP_MERGE: attempting ${task_id} via ${branch} (log: ${log})"
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    return 0
+  fi
+
+  if ! git -C "${ROOT_DIR}" rev-parse --verify --quiet "${branch}^{commit}" >/dev/null; then
+    echo "STARTUP_MERGE_FAIL: branch missing ${branch}" | tee -a "${log}"
+    return 1
+  fi
+
+  local ahead
+  ahead="$(git -C "${ROOT_DIR}" rev-list --count "HEAD..${branch}" 2>/dev/null || echo 0)"
+  if [[ "${ahead}" -eq 0 ]]; then
+    echo "STARTUP_MERGE_SKIP: no commits ahead on ${branch}" | tee -a "${log}"
+    return 0
+  fi
+
+  if git -C "${ROOT_DIR}" merge --no-ff "${branch}" -m "Merge ${branch}"; then
+    echo "STARTUP_MERGE_OK: merged ${branch}" | tee -a "${log}"
+    return 0
+  fi
+
+  echo "STARTUP_MERGE_WARN: merge failed for ${branch}; invoking codex resolver" | tee -a "${log}"
+  if resolve_merge_with_codex "${branch}" "${log}"; then
+    echo "STARTUP_MERGE_OK: codex resolved ${branch}" | tee -a "${log}"
+    return 0
+  fi
+
+  echo "STARTUP_MERGE_FAIL: unresolved ${branch}" | tee -a "${log}"
+  return 1
+}
+
+resolve_pending_merges_at_start() {
+  local pending_count=0
+  local merged_count=0
+  local unresolved_count=0
+
+  shopt -s nullglob
+  local lock_path
+  for lock_path in "${LOCK_DIR}"/task_*/meta.txt; do
+    local lock_dir task_id status branch
+    lock_dir="$(dirname "${lock_path}")"
+    task_id="$(basename "${lock_dir}")"
+    status="$(read_lock_meta_value "${lock_dir}" "status")"
+    [[ "${status}" != "pending_merge" ]] && continue
+
+    pending_count=$((pending_count + 1))
+    branch="$(read_lock_meta_value "${lock_dir}" "branch")"
+    if [[ -z "${branch}" ]]; then
+      echo "STARTUP_MERGE_WARN: ${task_id} has pending_merge but no branch metadata; leaving pending"
+      unresolved_count=$((unresolved_count + 1))
+      continue
+    fi
+
+    if merge_pending_branch_at_start "${task_id}" "${branch}"; then
+      set_lock_status "${task_id}" "done"
+      merged_count=$((merged_count + 1))
+    else
+      unresolved_count=$((unresolved_count + 1))
+    fi
+  done
+  shopt -u nullglob
+
+  if [[ "${pending_count}" -gt 0 ]]; then
+    echo "STARTUP_MERGE_SUMMARY: pending=${pending_count} merged=${merged_count} unresolved=${unresolved_count}"
   fi
 }
 
@@ -837,6 +936,8 @@ setup() {
   fi
 
   resolve_base_ref
+  resolve_pending_merges_at_start
+  commit_supervisor_task_updates "supervisor: reconcile pending merges at startup" || true
 }
 
 resolve_base_ref() {
@@ -1388,7 +1489,7 @@ spawn_round() {
     elif [[ "${st}" -eq 0 && "${ahead}" -gt 0 ]]; then
       TOTAL_FAIL=$((TOTAL_FAIL + 1))
       SUMMARY_FAIL+=("${task_text} (pending merge)")
-      mark_task_pending_merge "${task_id}"
+      mark_task_pending_merge "${task_id}" "${branch}" "${wt}" "${log}"
       echo "WARN: task has commits but is not integrated into main; left as pending_merge: ${task_id}" >>"${log}"
     else
       TOTAL_FAIL=$((TOTAL_FAIL + 1))
