@@ -29,4 +29,4 @@
 - Test262 pass rate: N/A
 - Unit tests: N/A
 - 2026-03-08: `Define ANF.Semantics small-step LTS` completed in `VerifiedJS/ANF/Semantics.lean` (pending supervisor validation move in `TASKS.md`)
-- 2026-03-08: `Define Wasm.Semantics (port from WasmCert-Coq)` completed in `VerifiedJS/Wasm/Semantics.lean` (implemented `br*`, `call_indirect`, `memory.size`, `memory.grow`, and bulk-op executable stubs; pending supervisor validation move in `TASKS.md`)
+- 2026-03-08: `Define Wasm.Semantics (port from WasmCert-Coq)` completed in `VerifiedJS/Wasm/Semantics.lean` (implemented concrete branches for `br*`, `call_indirect`, memory loads/stores, conversion/reinterpret op families, and bulk/table ops; pending supervisor validation move in `TASKS.md`)

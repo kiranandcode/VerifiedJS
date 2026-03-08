@@ -48,3 +48,8 @@ Template:
   Symptom: `./tests/run_tests.sh --fast` can fail before tests with missing local dirs (`mktemp ... test_logs/...: No such file or directory`, `find: tests/e2e: No such file or directory`).
   Fix: Ensure `test_logs/` and `tests/e2e/` exist before running (`mkdir -p test_logs tests/e2e`).
   Guardrail: In fresh worktrees, create both directories prior to invoking the test harness.
+
+- [2026-03-08] Context: `VerifiedJS/Wasm/Semantics.lean`
+  Symptom: Lean API mismatches (`Array.get?`, `UInt32/UInt64` nat-shift/rotate methods, and proof-style `ByteArray.set`) caused cascading compile failures.
+  Fix: Use supported idioms in this toolchain: `arr[idx]?`, `set!` for byte writes, and arithmetic fallbacks instead of unavailable nat-shift/rotate helpers.
+  Guardrail: Before adding low-level numeric/memory helpers, probe exact available APIs in this Lean version and prefer the local pattern used elsewhere in the repo.

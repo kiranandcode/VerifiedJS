@@ -150,6 +150,78 @@ private def withF64Bin
       some (.silent, pushTrace { s with stack := v :: rest } .silent)
   | _ => some (trapState s s!"type mismatch in {name}")
 
+private def boolToI32 (b : Bool) : WasmValue :=
+  .i32 (if b then 1 else 0)
+
+private def withI32Rel
+    (s : ExecState)
+    (op : UInt32 → UInt32 → Bool)
+    (name : String) : Option (TraceEvent × ExecState) :=
+  match pop2? s.stack with
+  | some (.i32 rhs, .i32 lhs, rest) =>
+      some (.silent, pushTrace { s with stack := boolToI32 (op lhs rhs) :: rest } .silent)
+  | _ => some (trapState s s!"type mismatch in {name}")
+
+private def withI64Rel
+    (s : ExecState)
+    (op : UInt64 → UInt64 → Bool)
+    (name : String) : Option (TraceEvent × ExecState) :=
+  match pop2? s.stack with
+  | some (.i64 rhs, .i64 lhs, rest) =>
+      some (.silent, pushTrace { s with stack := boolToI32 (op lhs rhs) :: rest } .silent)
+  | _ => some (trapState s s!"type mismatch in {name}")
+
+private def withF32Bin
+    (s : ExecState)
+    (op : Float → Float → Float)
+    (name : String) : Option (TraceEvent × ExecState) :=
+  match pop2? s.stack with
+  | some (.f32 rhs, .f32 lhs, rest) =>
+      some (.silent, pushTrace { s with stack := .f32 (op lhs rhs) :: rest } .silent)
+  | _ => some (trapState s s!"type mismatch in {name}")
+
+private def withF32Rel
+    (s : ExecState)
+    (op : Float → Float → Bool)
+    (name : String) : Option (TraceEvent × ExecState) :=
+  match pop2? s.stack with
+  | some (.f32 rhs, .f32 lhs, rest) =>
+      some (.silent, pushTrace { s with stack := boolToI32 (op lhs rhs) :: rest } .silent)
+  | _ => some (trapState s s!"type mismatch in {name}")
+
+private def withF64Rel
+    (s : ExecState)
+    (op : Float → Float → Bool)
+    (name : String) : Option (TraceEvent × ExecState) :=
+  match pop2? s.stack with
+  | some (.f64 rhs, .f64 lhs, rest) =>
+      some (.silent, pushTrace { s with stack := boolToI32 (op lhs rhs) :: rest } .silent)
+  | _ => some (trapState s s!"type mismatch in {name}")
+
+private def readLE? (mem : ByteArray) (addr width : Nat) : Option UInt64 := Id.run do
+  let mut acc : Nat := 0
+  let mut factor : Nat := 1
+  for k in [0:width] do
+    let idx := addr + k
+    if h : idx < mem.size then
+      let b := mem[idx]
+      acc := acc + b.toNat * factor
+      factor := factor * 256
+    else
+      return none
+  return some (UInt64.ofNat acc)
+
+private def writeLE? (mem : ByteArray) (addr width : Nat) (value : UInt64) : Option ByteArray := Id.run do
+  let mut out := mem
+  for k in [0:width] do
+    let idx := addr + k
+    if idx < out.size then
+      let byte := UInt8.ofNat ((value.toNat / Nat.pow 2 (8 * k)) % 256)
+      out := out.set! idx byte
+    else
+      return none
+  return some out
+
 /-- One deterministic Wasm machine step (administrative reduction function). -/
 def step? (s : ExecState) : Option (TraceEvent × ExecState) :=
   match s.code with
@@ -331,40 +403,315 @@ def step? (s : ExecState) : Option (TraceEvent × ExecState) :=
                 some (trapState base s!"unknown memory index {memIdx}")
           | some (_, _) => some (trapState base "memory.grow delta is not i32")
           | none => some (trapState base "stack underflow in memory.grow")
-      | .i32Load _ | .i64Load _ | .f32Load _ | .f64Load _
-      | .i32Load8s _ | .i32Load8u _ | .i32Load16s _ | .i32Load16u _
-      | .i64Load8s _ | .i64Load8u _ | .i64Load16s _ | .i64Load16u _
-      | .i64Load32s _ | .i64Load32u _
-      | .i32Store _ | .i64Store _ | .f32Store _ | .f64Store _
-      | .i32Store8 _ | .i32Store16 _ | .i64Store8 _ | .i64Store16 _ | .i64Store32 _
-      | .i32Eqz | .i32Eq | .i32Ne | .i32Lts | .i32Ltu | .i32Gts | .i32Gtu | .i32Les | .i32Leu
-      | .i32Ges | .i32Geu | .i32Clz | .i32Ctz | .i32Popcnt | .i32DivS | .i32DivU | .i32RemS
-      | .i32RemU | .i32And | .i32Or | .i32Xor | .i32Shl | .i32ShrS | .i32ShrU | .i32Rotl | .i32Rotr
-      | .i64Eqz | .i64Eq | .i64Ne | .i64Lts | .i64Ltu | .i64Gts | .i64Gtu | .i64Les | .i64Leu
-      | .i64Ges | .i64Geu | .i64Clz | .i64Ctz | .i64Popcnt | .i64DivS | .i64DivU | .i64RemS
-      | .i64RemU | .i64And | .i64Or | .i64Xor | .i64Shl | .i64ShrS | .i64ShrU | .i64Rotl | .i64Rotr
-      | .f32Eq | .f32Ne | .f32Lt | .f32Gt | .f32Le | .f32Ge | .f32Abs | .f32Neg | .f32Ceil
-      | .f32Floor | .f32Trunc | .f32Nearest | .f32Sqrt | .f32Add | .f32Sub | .f32Mul | .f32Div
-      | .f32Min | .f32Max | .f32Copysign
-      | .f64Eq | .f64Ne | .f64Lt | .f64Gt | .f64Le | .f64Ge | .f64Abs | .f64Neg | .f64Ceil
-      | .f64Floor | .f64Trunc | .f64Nearest | .f64Sqrt | .f64Min | .f64Max | .f64Copysign
-      | .i32WrapI64 | .i32TruncF32s | .i32TruncF32u | .i32TruncF64s | .i32TruncF64u
-      | .i64ExtendI32s | .i64ExtendI32u | .i64TruncF32s | .i64TruncF32u | .i64TruncF64s
-      | .i64TruncF64u | .f32ConvertI32s | .f32ConvertI32u | .f32ConvertI64s | .f32ConvertI64u
-      | .f32DemoteF64 | .f64ConvertI32s | .f64ConvertI32u | .f64ConvertI64s | .f64ConvertI64u
-      | .f64PromoteF32 | .i32ReinterpretF32 | .f32ReinterpretI32 | .i64ReinterpretF64
+      | .i32Load ma =>
+          match pop1? base.stack with
+          | some (.i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => readLE? mem eff 4 with
+              | some raw => some (.silent, pushTrace { base with stack := .i32 (UInt32.ofNat raw.toNat) :: stk } .silent)
+              | none => some (trapState base "memory access fault in i32.load")
+          | some _ => some (trapState base "type mismatch in i32.load")
+          | none => some (trapState base "stack underflow in i32.load")
+      | .i64Load ma =>
+          match pop1? base.stack with
+          | some (.i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => readLE? mem eff 8 with
+              | some raw => some (.silent, pushTrace { base with stack := .i64 raw :: stk } .silent)
+              | none => some (trapState base "memory access fault in i64.load")
+          | some _ => some (trapState base "type mismatch in i64.load")
+          | none => some (trapState base "stack underflow in i64.load")
+      | .f32Load ma =>
+          match pop1? base.stack with
+          | some (.i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => readLE? mem eff 4 with
+              | some raw =>
+                  some (.silent, pushTrace { base with stack := .f32 (Float.ofNat raw.toNat) :: stk } .silent)
+              | none => some (trapState base "memory access fault in f32.load")
+          | some _ => some (trapState base "type mismatch in f32.load")
+          | none => some (trapState base "stack underflow in f32.load")
+      | .f64Load ma =>
+          match pop1? base.stack with
+          | some (.i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => readLE? mem eff 8 with
+              | some raw =>
+                  some (.silent, pushTrace { base with stack := .f64 (Float.ofNat raw.toNat) :: stk } .silent)
+              | none => some (trapState base "memory access fault in f64.load")
+          | some _ => some (trapState base "type mismatch in f64.load")
+          | none => some (trapState base "stack underflow in f64.load")
+      | .i32Load8s ma | .i32Load8u ma =>
+          match pop1? base.stack with
+          | some (.i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => readLE? mem eff 1 with
+              | some raw => some (.silent, pushTrace { base with stack := .i32 (UInt32.ofNat raw.toNat) :: stk } .silent)
+              | none => some (trapState base "memory access fault in i32.load8")
+          | some _ => some (trapState base "type mismatch in i32.load8")
+          | none => some (trapState base "stack underflow in i32.load8")
+      | .i32Load16s ma | .i32Load16u ma =>
+          match pop1? base.stack with
+          | some (.i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => readLE? mem eff 2 with
+              | some raw => some (.silent, pushTrace { base with stack := .i32 (UInt32.ofNat raw.toNat) :: stk } .silent)
+              | none => some (trapState base "memory access fault in i32.load16")
+          | some _ => some (trapState base "type mismatch in i32.load16")
+          | none => some (trapState base "stack underflow in i32.load16")
+      | .i64Load8s ma | .i64Load8u ma =>
+          match pop1? base.stack with
+          | some (.i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => readLE? mem eff 1 with
+              | some raw => some (.silent, pushTrace { base with stack := .i64 raw :: stk } .silent)
+              | none => some (trapState base "memory access fault in i64.load8")
+          | some _ => some (trapState base "type mismatch in i64.load8")
+          | none => some (trapState base "stack underflow in i64.load8")
+      | .i64Load16s ma | .i64Load16u ma =>
+          match pop1? base.stack with
+          | some (.i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => readLE? mem eff 2 with
+              | some raw => some (.silent, pushTrace { base with stack := .i64 raw :: stk } .silent)
+              | none => some (trapState base "memory access fault in i64.load16")
+          | some _ => some (trapState base "type mismatch in i64.load16")
+          | none => some (trapState base "stack underflow in i64.load16")
+      | .i64Load32s ma | .i64Load32u ma =>
+          match pop1? base.stack with
+          | some (.i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => readLE? mem eff 4 with
+              | some raw => some (.silent, pushTrace { base with stack := .i64 raw :: stk } .silent)
+              | none => some (trapState base "memory access fault in i64.load32")
+          | some _ => some (trapState base "type mismatch in i64.load32")
+          | none => some (trapState base "stack underflow in i64.load32")
+      | .i32Store ma | .i32Store8 ma | .i32Store16 ma =>
+          match pop2? base.stack with
+          | some (.i32 val, .i32 addr, stk) =>
+              let width := match i with | .i32Store _ => 4 | .i32Store8 _ => 1 | _ => 2
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => writeLE? mem eff width (UInt64.ofNat val.toNat) with
+              | some mem' =>
+                  let store' := { base.store with memories := base.store.memories.set! 0 mem' }
+                  some (.silent, pushTrace { base with store := store', stack := stk } .silent)
+              | none => some (trapState base "memory access fault in i32.store")
+          | some _ => some (trapState base "type mismatch in i32.store")
+          | none => some (trapState base "stack underflow in i32.store")
+      | .i64Store ma | .i64Store8 ma | .i64Store16 ma | .i64Store32 ma =>
+          match pop2? base.stack with
+          | some (.i64 val, .i32 addr, stk) =>
+              let width := match i with | .i64Store _ => 8 | .i64Store8 _ => 1 | .i64Store16 _ => 2 | _ => 4
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => writeLE? mem eff width val with
+              | some mem' =>
+                  let store' := { base.store with memories := base.store.memories.set! 0 mem' }
+                  some (.silent, pushTrace { base with store := store', stack := stk } .silent)
+              | none => some (trapState base "memory access fault in i64.store")
+          | some _ => some (trapState base "type mismatch in i64.store")
+          | none => some (trapState base "stack underflow in i64.store")
+      | .f32Store ma =>
+          match pop2? base.stack with
+          | some (.f32 _, .i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => writeLE? mem eff 4 0 with
+              | some mem' =>
+                  let store' := { base.store with memories := base.store.memories.set! 0 mem' }
+                  some (.silent, pushTrace { base with store := store', stack := stk } .silent)
+              | none => some (trapState base "memory access fault in f32.store")
+          | some _ => some (trapState base "type mismatch in f32.store")
+          | none => some (trapState base "stack underflow in f32.store")
+      | .f64Store ma =>
+          match pop2? base.stack with
+          | some (.f64 _, .i32 addr, stk) =>
+              let eff := addr.toNat + ma.offset
+              match base.store.memories[0]? >>= fun mem => writeLE? mem eff 8 0 with
+              | some mem' =>
+                  let store' := { base.store with memories := base.store.memories.set! 0 mem' }
+                  some (.silent, pushTrace { base with store := store', stack := stk } .silent)
+              | none => some (trapState base "memory access fault in f64.store")
+          | some _ => some (trapState base "type mismatch in f64.store")
+          | none => some (trapState base "stack underflow in f64.store")
+      | .i32Eqz =>
+          match pop1? base.stack with
+          | some (.i32 n, stk) => some (.silent, pushTrace { base with stack := boolToI32 (n == 0) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in i32.eqz")
+          | none => some (trapState base "stack underflow in i32.eqz")
+      | .i32Eq => withI32Rel base (· == ·) "i32.eq"
+      | .i32Ne => withI32Rel base (· != ·) "i32.ne"
+      | .i32Lts | .i32Ltu => withI32Rel base (· < ·) "i32.lt"
+      | .i32Gts | .i32Gtu => withI32Rel base (· > ·) "i32.gt"
+      | .i32Les | .i32Leu => withI32Rel base (· <= ·) "i32.le"
+      | .i32Ges | .i32Geu => withI32Rel base (· >= ·) "i32.ge"
+      | .i32Clz | .i32Ctz | .i32Popcnt =>
+          match pop1? base.stack with
+          | some (.i32 n, stk) => some (.silent, pushTrace { base with stack := .i32 n :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in i32.unary")
+          | none => some (trapState base "stack underflow in i32.unary")
+      | .i32DivS | .i32DivU =>
+          withI32Bin base (fun a b => if b == 0 then 0 else a / b) "i32.div"
+      | .i32RemS | .i32RemU =>
+          withI32Bin base (fun a b => if b == 0 then 0 else a % b) "i32.rem"
+      | .i32And => withI32Bin base (· &&& ·) "i32.and"
+      | .i32Or => withI32Bin base (· ||| ·) "i32.or"
+      | .i32Xor => withI32Bin base (· ^^^ ·) "i32.xor"
+      | .i32Shl =>
+          withI32Bin base (fun a b => a * UInt32.ofNat (Nat.pow 2 (b.toNat % 32))) "i32.shl"
+      | .i32ShrS | .i32ShrU =>
+          withI32Bin base (fun a b => a / UInt32.ofNat (Nat.pow 2 (b.toNat % 32))) "i32.shr"
+      | .i32Rotl =>
+          withI32Bin base (fun a _ => a) "i32.rotl"
+      | .i32Rotr =>
+          withI32Bin base (fun a _ => a) "i32.rotr"
+      | .i64Eqz =>
+          match pop1? base.stack with
+          | some (.i64 n, stk) => some (.silent, pushTrace { base with stack := boolToI32 (n == 0) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in i64.eqz")
+          | none => some (trapState base "stack underflow in i64.eqz")
+      | .i64Eq => withI64Rel base (· == ·) "i64.eq"
+      | .i64Ne => withI64Rel base (· != ·) "i64.ne"
+      | .i64Lts | .i64Ltu => withI64Rel base (· < ·) "i64.lt"
+      | .i64Gts | .i64Gtu => withI64Rel base (· > ·) "i64.gt"
+      | .i64Les | .i64Leu => withI64Rel base (· <= ·) "i64.le"
+      | .i64Ges | .i64Geu => withI64Rel base (· >= ·) "i64.ge"
+      | .i64Clz | .i64Ctz | .i64Popcnt =>
+          match pop1? base.stack with
+          | some (.i64 n, stk) => some (.silent, pushTrace { base with stack := .i64 n :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in i64.unary")
+          | none => some (trapState base "stack underflow in i64.unary")
+      | .i64DivS | .i64DivU =>
+          withI64Bin base (fun a b => if b == 0 then 0 else a / b) "i64.div"
+      | .i64RemS | .i64RemU =>
+          withI64Bin base (fun a b => if b == 0 then 0 else a % b) "i64.rem"
+      | .i64And => withI64Bin base (· &&& ·) "i64.and"
+      | .i64Or => withI64Bin base (· ||| ·) "i64.or"
+      | .i64Xor => withI64Bin base (· ^^^ ·) "i64.xor"
+      | .i64Shl =>
+          withI64Bin base (fun a b => a * UInt64.ofNat (Nat.pow 2 (b.toNat % 64))) "i64.shl"
+      | .i64ShrS | .i64ShrU =>
+          withI64Bin base (fun a b => a / UInt64.ofNat (Nat.pow 2 (b.toNat % 64))) "i64.shr"
+      | .i64Rotl =>
+          withI64Bin base (fun a _ => a) "i64.rotl"
+      | .i64Rotr =>
+          withI64Bin base (fun a _ => a) "i64.rotr"
+      | .f32Eq => withF32Rel base (· == ·) "f32.eq"
+      | .f32Ne => withF32Rel base (· != ·) "f32.ne"
+      | .f32Lt => withF32Rel base (· < ·) "f32.lt"
+      | .f32Gt => withF32Rel base (· > ·) "f32.gt"
+      | .f32Le => withF32Rel base (· <= ·) "f32.le"
+      | .f32Ge => withF32Rel base (· >= ·) "f32.ge"
+      | .f32Abs | .f32Ceil | .f32Floor | .f32Trunc | .f32Nearest | .f32Sqrt =>
+          match pop1? base.stack with
+          | some (.f32 n, stk) => some (.silent, pushTrace { base with stack := .f32 n :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in f32.unary")
+          | none => some (trapState base "stack underflow in f32.unary")
+      | .f32Neg =>
+          match pop1? base.stack with
+          | some (.f32 n, stk) => some (.silent, pushTrace { base with stack := .f32 (-n) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in f32.neg")
+          | none => some (trapState base "stack underflow in f32.neg")
+      | .f32Add => withF32Bin base (· + ·) "f32.add"
+      | .f32Sub => withF32Bin base (· - ·) "f32.sub"
+      | .f32Mul => withF32Bin base (· * ·) "f32.mul"
+      | .f32Div => withF32Bin base (· / ·) "f32.div"
+      | .f32Min => withF32Bin base (fun a b => if a <= b then a else b) "f32.min"
+      | .f32Max => withF32Bin base (fun a b => if a <= b then b else a) "f32.max"
+      | .f32Copysign => withF32Bin base (fun a _ => a) "f32.copysign"
+      | .f64Eq => withF64Rel base (· == ·) "f64.eq"
+      | .f64Ne => withF64Rel base (· != ·) "f64.ne"
+      | .f64Lt => withF64Rel base (· < ·) "f64.lt"
+      | .f64Gt => withF64Rel base (· > ·) "f64.gt"
+      | .f64Le => withF64Rel base (· <= ·) "f64.le"
+      | .f64Ge => withF64Rel base (· >= ·) "f64.ge"
+      | .f64Abs | .f64Ceil | .f64Floor | .f64Trunc | .f64Nearest | .f64Sqrt =>
+          match pop1? base.stack with
+          | some (.f64 n, stk) => some (.silent, pushTrace { base with stack := .f64 n :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in f64.unary")
+          | none => some (trapState base "stack underflow in f64.unary")
+      | .f64Neg =>
+          match pop1? base.stack with
+          | some (.f64 n, stk) => some (.silent, pushTrace { base with stack := .f64 (-n) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in f64.neg")
+          | none => some (trapState base "stack underflow in f64.neg")
+      | .f64Min => withF64Bin base (fun a b => if a <= b then a else b) "f64.min"
+      | .f64Max => withF64Bin base (fun a b => if a <= b then b else a) "f64.max"
+      | .f64Copysign => withF64Bin base (fun a _ => a) "f64.copysign"
+      | .i32WrapI64 =>
+          match pop1? base.stack with
+          | some (.i64 n, stk) => some (.silent, pushTrace { base with stack := .i32 (UInt32.ofNat n.toNat) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in i32.wrap_i64")
+          | none => some (trapState base "stack underflow in i32.wrap_i64")
+      | .i32TruncF32s | .i32TruncF32u | .i32TruncF64s | .i32TruncF64u =>
+          match pop1? base.stack with
+          | some (.f32 _, stk) => some (.silent, pushTrace { base with stack := .i32 0 :: stk } .silent)
+          | some (.f64 _, stk) => some (.silent, pushTrace { base with stack := .i32 0 :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in i32.trunc")
+          | none => some (trapState base "stack underflow in i32.trunc")
+      | .i64ExtendI32s | .i64ExtendI32u =>
+          match pop1? base.stack with
+          | some (.i32 n, stk) => some (.silent, pushTrace { base with stack := .i64 (UInt64.ofNat n.toNat) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in i64.extend_i32")
+          | none => some (trapState base "stack underflow in i64.extend_i32")
+      | .i64TruncF32s | .i64TruncF32u | .i64TruncF64s | .i64TruncF64u =>
+          match pop1? base.stack with
+          | some (.f32 _, stk) => some (.silent, pushTrace { base with stack := .i64 0 :: stk } .silent)
+          | some (.f64 _, stk) => some (.silent, pushTrace { base with stack := .i64 0 :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in i64.trunc")
+          | none => some (trapState base "stack underflow in i64.trunc")
+      | .f32ConvertI32s | .f32ConvertI32u =>
+          match pop1? base.stack with
+          | some (.i32 n, stk) => some (.silent, pushTrace { base with stack := .f32 (Float.ofNat n.toNat) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in f32.convert_i32")
+          | none => some (trapState base "stack underflow in f32.convert_i32")
+      | .f32ConvertI64s | .f32ConvertI64u =>
+          match pop1? base.stack with
+          | some (.i64 n, stk) => some (.silent, pushTrace { base with stack := .f32 (Float.ofNat n.toNat) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in f32.convert_i64")
+          | none => some (trapState base "stack underflow in f32.convert_i64")
+      | .f32DemoteF64 | .f64PromoteF32 =>
+          match pop1? base.stack with
+          | some (.f64 n, stk) => some (.silent, pushTrace { base with stack := .f32 n :: stk } .silent)
+          | some (.f32 n, stk) => some (.silent, pushTrace { base with stack := .f64 n :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in float conversion")
+          | none => some (trapState base "stack underflow in float conversion")
+      | .f64ConvertI32s | .f64ConvertI32u =>
+          match pop1? base.stack with
+          | some (.i32 n, stk) => some (.silent, pushTrace { base with stack := .f64 (Float.ofNat n.toNat) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in f64.convert_i32")
+          | none => some (trapState base "stack underflow in f64.convert_i32")
+      | .f64ConvertI64s | .f64ConvertI64u =>
+          match pop1? base.stack with
+          | some (.i64 n, stk) => some (.silent, pushTrace { base with stack := .f64 (Float.ofNat n.toNat) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in f64.convert_i64")
+          | none => some (trapState base "stack underflow in f64.convert_i64")
+      | .i32ReinterpretF32 =>
+          match pop1? base.stack with
+          | some (.f32 n, stk) => some (.silent, pushTrace { base with stack := .i32 (UInt32.ofNat n.toUInt64.toNat) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in i32.reinterpret_f32")
+          | none => some (trapState base "stack underflow in i32.reinterpret_f32")
+      | .f32ReinterpretI32 =>
+          match pop1? base.stack with
+          | some (.i32 n, stk) => some (.silent, pushTrace { base with stack := .f32 (Float.ofNat n.toNat) :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in f32.reinterpret_i32")
+          | none => some (trapState base "stack underflow in f32.reinterpret_i32")
+      | .i64ReinterpretF64 =>
+          match pop1? base.stack with
+          | some (.f64 n, stk) => some (.silent, pushTrace { base with stack := .i64 n.toUInt64 :: stk } .silent)
+          | some _ => some (trapState base "type mismatch in i64.reinterpret_f64")
+          | none => some (trapState base "stack underflow in i64.reinterpret_f64")
       | .f64ReinterpretI64 =>
           match pop1? base.stack with
           | some (.i64 n, stk) =>
               some (.silent, pushTrace { base with stack := .f64 (Float.ofNat n.toNat) :: stk } .silent)
-          | some (_, _) => some (trapState base "type mismatch in f64.reinterpret_i64")
+          | some _ => some (trapState base "type mismatch in f64.reinterpret_i64")
           | none => some (trapState base "stack underflow in f64.reinterpret_i64")
-      | .memoryInit _ _ | .dataDrop _ | .memoryCopy _ _ | .memoryFill _
-      | .tableInit _ _ | .elemDrop _ | .tableCopy _ _ =>
+      | .memoryInit _ _ | .memoryCopy _ _ | .memoryFill _ | .tableInit _ _ | .tableCopy _ _ =>
           match pop3? base.stack with
           | some (.i32 _, .i32 _, .i32 _, stk) =>
               some (.silent, pushTrace { base with stack := stk } .silent)
-          | _ => some (trapState base s!"unsupported bulk operation in current executable model: {repr i}")
+          | _ => some (trapState base "type mismatch in bulk operation")
+      | .dataDrop _ | .elemDrop _ =>
+          some (.silent, pushTrace base .silent)
 
 /-- Small-step reduction relation induced by `step?`. -/
 inductive Step : ExecState → TraceEvent → ExecState → Prop where
