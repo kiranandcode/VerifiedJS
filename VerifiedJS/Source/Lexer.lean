@@ -10,6 +10,7 @@ namespace VerifiedJS.Source
 inductive TokenKind where
   -- Literals
   | number (n : Float)
+  | bigint (digits : String)
   | string (s : String)
   | template (parts : List String)
   | regex (pattern flags : String)
@@ -81,10 +82,179 @@ private def controlHeaderKeyword (s : String) : Bool :=
   s = "if" || s = "while" || s = "for" || s = "with" || s = "catch"
 
 private def tokenCanEndExpression : TokenKind → Bool
-  | .number _ | .string _ | .regex _ _ | .ident _ => true
+  | .number _ | .bigint _ | .string _ | .regex _ _ | .ident _ => true
   | .kw k => k = "this" || k = "true" || k = "false" || k = "null" || k = "undefined"
   | .punct p => p = ")" || p = "]" || p = "}" || p = "++" || p = "--"
   | _ => false
+
+private def hexDigitVal? (c : Char) : Option Nat :=
+  if c.isDigit then
+    some (c.toNat - '0'.toNat)
+  else if c >= 'a' && c <= 'f' then
+    some (10 + (c.toNat - 'a'.toNat))
+  else if c >= 'A' && c <= 'F' then
+    some (10 + (c.toNat - 'A'.toNat))
+  else
+    none
+
+private def parseUnicodeEscapeStart? : List Char → Option (Char × List Char × Nat) :=
+  match · with
+  | '\\' :: 'u' :: h1 :: h2 :: h3 :: h4 :: rest =>
+      match hexDigitVal? h1, hexDigitVal? h2, hexDigitVal? h3, hexDigitVal? h4 with
+      | some v1, some v2, some v3, some v4 =>
+          let cp := v1 * 4096 + v2 * 256 + v3 * 16 + v4
+          match Char.ofNat? cp with
+          | some ch => some (ch, rest, 6)
+          | none => none
+      | _, _, _, _ => none
+  | _ => none
+
+private def stripUnderscoresChars (cs : List Char) : List Char :=
+  cs.filter (fun c => c != '_')
+
+private def pow10Nat (n : Nat) : Float :=
+  (List.replicate n ()).foldl (fun acc _ => acc * 10.0) 1.0
+
+private def parseNatBase? (base : Nat) (cs : List Char) : Option Nat :=
+  let rec go (rest : List Char) (acc : Nat) : Option Nat :=
+    match rest with
+    | [] => some acc
+    | c :: tail =>
+        let digit? :=
+          if c.isDigit then
+            some (c.toNat - '0'.toNat)
+          else if c >= 'a' && c <= 'f' then
+            some (10 + (c.toNat - 'a'.toNat))
+          else if c >= 'A' && c <= 'F' then
+            some (10 + (c.toNat - 'A'.toNat))
+          else
+            none
+        match digit? with
+        | some d =>
+            if d < base then
+              go tail (acc * base + d)
+            else
+              none
+        | none => none
+  go cs 0
+
+private def parseUnsignedDecimal? (cs : List Char) : Option Nat :=
+  if cs.isEmpty then
+    none
+  else
+    parseNatBase? 10 cs
+
+private def parseNumberFloat (raw : String) : Float :=
+  let s := String.mk (stripUnderscoresChars raw.toList)
+  if s.startsWith "0x" || s.startsWith "0X" then
+    let hexPart := (s.drop 2).toList
+    match parseNatBase? 16 hexPart with
+    | some n => Float.ofNat n
+    | none => 0.0
+  else if s.startsWith "0b" || s.startsWith "0B" then
+    let binPart := (s.drop 2).toList
+    match parseNatBase? 2 binPart with
+    | some n => Float.ofNat n
+    | none => 0.0
+  else if s.startsWith "0o" || s.startsWith "0O" then
+    let octPart := (s.drop 2).toList
+    match parseNatBase? 8 octPart with
+    | some n => Float.ofNat n
+    | none => 0.0
+  else
+    let expParts := String.splitOn s "e"
+    let (mantStr, expStr?) :=
+      match expParts with
+      | [m, e] => (m, some e)
+      | _ =>
+          let expPartsUpper := String.splitOn s "E"
+          match expPartsUpper with
+          | [m, e] => (m, some e)
+          | _ => (s, none)
+    let mantParts := String.splitOn mantStr "."
+    let mantVal :=
+      match mantParts with
+      | [whole] =>
+          match parseUnsignedDecimal? whole.toList with
+          | some n => Float.ofNat n
+          | none => 0.0
+      | [whole, frac] =>
+          let wholeVal :=
+            match parseUnsignedDecimal? whole.toList with
+            | some n => Float.ofNat n
+            | none => 0.0
+          let fracVal :=
+            match parseUnsignedDecimal? frac.toList with
+            | some n => Float.ofNat n / pow10Nat frac.length
+            | none => 0.0
+          wholeVal + fracVal
+      | _ => 0.0
+    match expStr? with
+    | none => mantVal
+    | some expRaw =>
+        let expSignNeg := expRaw.startsWith "-"
+        let expDigits :=
+          if expRaw.startsWith "-" || expRaw.startsWith "+" then
+            (expRaw.drop 1).toString
+          else
+            expRaw
+        match parseUnsignedDecimal? expDigits.toList with
+        | some e =>
+            if expSignNeg then
+              mantVal / pow10Nat e
+            else
+              mantVal * pow10Nat e
+        | none => mantVal
+
+private def readNumberLiteral (chars : List Char) : String × List Char :=
+  match chars with
+  | '0' :: ('x' :: cs) =>
+      let (restDigits, rest) := readWhile cs (fun ch => ch.isDigit || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch = '_')
+      ("0x" ++ String.mk restDigits, rest)
+  | '0' :: ('X' :: cs) =>
+      let (restDigits, rest) := readWhile cs (fun ch => ch.isDigit || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') || ch = '_')
+      ("0X" ++ String.mk restDigits, rest)
+  | '0' :: ('b' :: cs) =>
+      let (restDigits, rest) := readWhile cs (fun ch => ch = '0' || ch = '1' || ch = '_')
+      ("0b" ++ String.mk restDigits, rest)
+  | '0' :: ('B' :: cs) =>
+      let (restDigits, rest) := readWhile cs (fun ch => ch = '0' || ch = '1' || ch = '_')
+      ("0B" ++ String.mk restDigits, rest)
+  | '0' :: ('o' :: cs) =>
+      let (restDigits, rest) := readWhile cs (fun ch => ((ch >= '0' && ch <= '7') || ch = '_'))
+      ("0o" ++ String.mk restDigits, rest)
+  | '0' :: ('O' :: cs) =>
+      let (restDigits, rest) := readWhile cs (fun ch => ((ch >= '0' && ch <= '7') || ch = '_'))
+      ("0O" ++ String.mk restDigits, rest)
+  | _ =>
+      let (intDigits, rest0) := readWhile chars (fun ch => ch.isDigit || ch = '_')
+      let intPart := String.mk intDigits
+      let (fracPart, rest1) :=
+        match rest0 with
+        | '.' :: tail =>
+            let (fracDigits, restTail) := readWhile tail (fun ch => ch.isDigit || ch = '_')
+            ("." ++ String.mk fracDigits, restTail)
+        | _ => ("", rest0)
+      let (expPart, rest2) :=
+        match rest1 with
+        | ('e' :: tail) =>
+            let (signPart, tail1) :=
+              match tail with
+              | ('+' :: more) => ("+", more)
+              | ('-' :: more) => ("-", more)
+              | _ => ("", tail)
+            let (expDigits, restTail) := readWhile tail1 (fun ch => ch.isDigit || ch = '_')
+            ("e" ++ signPart ++ String.mk expDigits, restTail)
+        | ('E' :: tail) =>
+            let (signPart, tail1) :=
+              match tail with
+              | ('+' :: more) => ("+", more)
+              | ('-' :: more) => ("-", more)
+              | _ => ("", tail)
+            let (expDigits, restTail) := readWhile tail1 (fun ch => ch.isDigit || ch = '_')
+            ("E" ++ signPart ++ String.mk expDigits, restTail)
+        | _ => ("", rest1)
+      (intPart ++ fracPart ++ expPart, rest2)
 
 private def skipLineComment (chars : List Char) : List Char × Nat :=
   let rec go (rest : List Char) (consumed : Nat) :=
@@ -244,11 +414,35 @@ partial def tokenizeChars
         | _ => false
       tokenizeChars rest line (col + idChars.length) (offset + idChars.length)
         (not (tokenCanEndExpression kind)) parenDepth controlHeaderParens pendingControlHeader' braceDepth controlBlockBraces false (tok :: acc)
+    else if c = '\\' then
+      match parseUnicodeEscapeStart? (c :: cs) with
+      | some (firstCh, rest0, consumed0) =>
+          if isIdentStart firstCh then
+            let (tailChars, rest) := readWhile rest0 isIdentContinue
+            let idChars := firstCh :: tailChars
+            let s := String.mk idChars
+            let kind := if isKeyword s then TokenKind.kw s else TokenKind.ident s
+            let tok : Token := { kind, pos := { line, col, offset } }
+            let pendingControlHeader' := match kind with
+              | .kw k => controlHeaderKeyword k
+              | _ => false
+            let consumed := consumed0 + tailChars.length
+            tokenizeChars rest line (col + consumed) (offset + consumed)
+              (not (tokenCanEndExpression kind)) parenDepth controlHeaderParens pendingControlHeader' braceDepth controlBlockBraces false (tok :: acc)
+          else
+            throw s!"Lexer error at {line}:{col}: invalid unicode escape identifier start"
+      | none =>
+          throw s!"Lexer error at {line}:{col}: invalid unicode escape"
     else if c.isDigit then
-      let (numChars, rest) := readWhile (c :: cs) (fun ch => ch.isDigit || ch = '.')
-      let n := (String.toNat? (String.mk numChars)).getD 0
-      let tok : Token := { kind := .number (Float.ofNat n), pos := { line, col, offset } }
-      tokenizeChars rest line (col + numChars.length) (offset + numChars.length) false parenDepth controlHeaderParens false braceDepth controlBlockBraces false (tok :: acc)
+      let (numRaw, rest0) := readNumberLiteral (c :: cs)
+      let (kind, rest, consumed) :=
+        match rest0 with
+        | 'n' :: tail =>
+            (TokenKind.bigint (String.mk (stripUnderscoresChars numRaw.toList)), tail, numRaw.length + 1)
+        | _ =>
+            (TokenKind.number (parseNumberFloat numRaw), rest0, numRaw.length)
+      let tok : Token := { kind, pos := { line, col, offset } }
+      tokenizeChars rest line (col + consumed) (offset + consumed) false parenDepth controlHeaderParens false braceDepth controlBlockBraces false (tok :: acc)
     else if c = '"' || c = '\'' then
       let (body, rest, consumedTail) := readStringBody c cs
       let tok : Token := { kind := .string body, pos := { line, col, offset } }

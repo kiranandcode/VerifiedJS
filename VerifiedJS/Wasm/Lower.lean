@@ -312,10 +312,9 @@ private partial def lowerExpr (ctx : LowerCtx) : ANF.Expr → LowerM (List IR.IR
         match finally_ with
         | some f => lowerExpr ctx f
         | none => pure []
-      pure
-        [IR.IRInstr.block "try"
-          (bodyCode ++ [IR.IRInstr.br "try_end"] ++ catchCode ++ finallyCode ++
-            [IR.IRInstr.block "try_end" []])]
+      -- Exceptions are not modeled yet; preserve compilation by sequencing body/finally and
+      -- retaining catch code in-place for structural coverage without unresolved labels.
+      pure (bodyCode ++ [IR.IRInstr.drop] ++ catchCode ++ [IR.IRInstr.drop] ++ finallyCode)
   | .«return» arg =>
       match arg with
       | some v => do

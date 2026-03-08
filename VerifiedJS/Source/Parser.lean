@@ -73,6 +73,7 @@ private partial def skipNewlines : ParserM Unit := do
 private def tokenDesc (t : Token) : String :=
   match t.kind with
   | .number _ => "number"
+  | .bigint _ => "bigint"
   | .string _ => "string"
   | .template _ => "template"
   | .regex _ _ => "regex"
@@ -504,8 +505,9 @@ private partial def parseFunctionExpr : ParserM Expr := do
     | .ident n =>
       let _ <- bump
       pure (some n)
-    | _ => pure none)
+  | _ => pure none)
   let params <- parseParamList
+  skipNewlines
   let body <- parseFunctionBody
   pure (.function name params body)
 
@@ -527,6 +529,9 @@ private partial def parsePrimaryM : ParserM Expr := do
   | .number n =>
     let _ <- bump
     pure (.lit (.number n))
+  | .bigint digits =>
+    let _ <- bump
+    pure (.lit (.bigint digits))
   | .string s =>
     let _ <- bump
     pure (.lit (.string s))
@@ -1207,6 +1212,7 @@ private partial def parseFunctionDecl (isAsync : Bool) : ParserM Stmt := do
   let isGenerator <- consumePunct? "*"
   let name <- expectIdent
   let params <- parseParamList
+  skipNewlines
   let body <- match (← parseBlockStmt) with
     | .block stmts => pure stmts
     | _ => throw "internal parser error: block expected"
