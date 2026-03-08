@@ -30,6 +30,7 @@ TOTAL_AGENTS=0
 TOTAL_OK=0
 TOTAL_FAIL=0
 LAST_TEST_PASS="N/A"
+LAST_TEST_LOG=""
 declare -a SUMMARY_OK
 declare -a SUMMARY_FAIL
 declare -a ROUND_TASK_IDS
@@ -445,20 +446,21 @@ push_and_cleanup() {
     local ahead
     ahead="$(git -C "${ROOT_DIR}" rev-list --count "HEAD..${branch}" 2>/dev/null || echo 0)"
     if [[ "${ahead}" -gt 0 ]]; then
-      if git -C "${ROOT_DIR}" diff --quiet && git -C "${ROOT_DIR}" diff --cached --quiet; then
-        if git -C "${ROOT_DIR}" merge --no-ff "${branch}" -m "Merge ${branch}"; then
+      if git -C "${ROOT_DIR}" merge --no-ff "${branch}" -m "Merge ${branch}"; then
+        merged=1
+        LAST_INTEGRATED=1
+        echo "INFO: merged ${branch} into $(git -C "${ROOT_DIR}" branch --show-current)" >>"${log}"
+      else
+        echo "WARN: merge command failed for ${branch}; invoking codex for conflict resolution" >>"${log}"
+        if resolve_merge_with_codex "${branch}" "${log}"; then
           merged=1
           LAST_INTEGRATED=1
-          echo "INFO: merged ${branch} into $(git -C "${ROOT_DIR}" branch --show-current)" >>"${log}"
+          echo "INFO: codex resolved merge for ${branch}" >>"${log}"
         else
-          echo "WARN: merge failed for ${branch}; leaving branch/worktree for manual resolve" >>"${log}"
-          echo "WARN: merge failed for ${branch}; keeping local state"
+          echo "WARN: codex could not resolve merge for ${branch}; keeping branch/worktree for manual resolve" >>"${log}"
+          echo "WARN: merge unresolved for ${branch}; retained ${wt}"
           return 0
         fi
-      else
-        echo "WARN: root tree dirty; skipping auto-merge for ${branch}; keeping branch/worktree for manual merge" >>"${log}"
-        echo "WARN: root tree dirty; retained ${branch} at ${wt} for manual merge"
-        return 0
       fi
     fi
   fi
@@ -496,6 +498,59 @@ push_and_cleanup() {
   else
     git -C "${ROOT_DIR}" branch -D "${branch}" >/dev/null 2>&1 || true
   fi
+}
+
+resolve_merge_with_codex() {
+  local branch="$1"
+  local log="$2"
+
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    return 0
+  fi
+
+  local prompt=""
+  prompt+="A git merge of branch '${branch}' is currently in progress in this repository and has conflicts or unresolved merge state."$'\n'
+  prompt+="Resolve all merge issues now using this workspace, preserving both sides' intent, then complete the merge commit."$'\n'
+  prompt+="Requirements:"$'\n'
+  prompt+="- Do not abort the merge."$'\n'
+  prompt+="- Stage resolved files and finish with a merge commit."$'\n'
+  prompt+="- Keep changes minimal and compile/test-safe when possible."$'\n'
+  prompt+="- Exit non-zero only if you cannot complete the merge."$'\n'
+
+  if ! (
+    cd "${ROOT_DIR}"
+    codex exec -C "${ROOT_DIR}" \
+      --add-dir "${ROOT_DIR}/.git" \
+      --add-dir "${ROOT_DIR}/.lake" \
+      "${prompt}"
+  ) >>"${log}" 2>&1; then
+    return 1
+  fi
+
+  if git -C "${ROOT_DIR}" rev-parse --verify --quiet MERGE_HEAD >/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
+record_test_failure_todo() {
+  local round="$1"
+  local sup_log="$2"
+  local todo
+  todo="- [ ] Investigate supervisor test-gate failure after round ${round} (`${TEST_CMD}`); see ${sup_log}"
+
+  if grep -Fqx "${todo}" "${TASKS_FILE}"; then
+    echo "ROUND ${round}: todo already exists for this failing test gate"
+    return 0
+  fi
+
+  echo "${todo}" >> "${TASKS_FILE}"
+  git -C "${ROOT_DIR}" add "${TASKS_FILE}" >/dev/null 2>&1 || true
+  if git -C "${ROOT_DIR}" diff --cached --quiet; then
+    return 0
+  fi
+  git -C "${ROOT_DIR}" commit -m "supervisor: add TODO for failing test gate (round ${round})" >/dev/null 2>&1 || true
+  echo "ROUND ${round}: added TODO to ${TASKS_FILE} and committed"
 }
 
 collect_assignments() {
@@ -685,6 +740,7 @@ run_test_cmd() {
   local round="$1"
   local sup_log="${LOG_ROOT}/supervisor_round_${round}_$(timestamp).log"
   echo "ROUND ${round}: running test gate: ${TEST_CMD}"
+  LAST_TEST_LOG="${sup_log}"
 
   if [[ "${DRY_RUN}" -eq 1 ]]; then
     echo "[dry-run] (cd ${ROOT_DIR} && ${TEST_CMD})"
@@ -700,6 +756,7 @@ run_test_cmd() {
   else
     echo "ROUND ${round}: test=FAIL log=${sup_log}"
     LAST_TEST_PASS="FAIL"
+    record_test_failure_todo "${round}" "${sup_log}"
     return 1
   fi
 }
