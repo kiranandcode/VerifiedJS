@@ -100,6 +100,23 @@ private def consumeKeyword? (k : String) : ParserM Bool := do
       pure false
   | _ => pure false
 
+private def consumeWord? (w : String) : ParserM Bool := do
+  let t <- peek
+  match t.kind with
+  | .kw w' =>
+    if w = w' then
+      let _ <- bump
+      pure true
+    else
+      pure false
+  | .ident w' =>
+    if w = w' then
+      let _ <- bump
+      pure true
+    else
+      pure false
+  | _ => pure false
+
 private def expectPunct (p : String) : ParserM Unit := do
   let ok <- consumePunct? p
   if ok then
@@ -113,6 +130,13 @@ private def expectKeyword (k : String) : ParserM Unit := do
     pure ()
   else
     failExpected s!"keyword `{k}`"
+
+private def expectWord (w : String) : ParserM Unit := do
+  let ok <- consumeWord? w
+  if ok then
+    pure ()
+  else
+    failExpected s!"`{w}`"
 
 private def expectIdent : ParserM String := do
   let t <- peek
@@ -669,20 +693,58 @@ private partial def parseArrowFromSingleIdent? : ParserM (Option Expr) := do
     pure (some (.arrowFunction [parsePatternFromIdent name] body))
   | _, _ => pure none
 
+private partial def parseArrowFromParenParams? : ParserM (Option Expr) := do
+  let st0 <- get
+  try
+    if !(← consumePunct? "(") then
+      pure none
+    else
+      let params <-
+        if (← consumePunct? ")") then
+          pure []
+        else
+          let first <- parsePatternFromIdent <$> parseIdentLike
+          let rec loop (acc : List Pattern) : ParserM (List Pattern) := do
+            if (← consumePunct? ",") then
+              if (← consumePunct? ")") then
+                pure acc.reverse
+              else
+                let p <- parsePatternFromIdent <$> parseIdentLike
+                loop (p :: acc)
+            else
+              expectPunct ")"
+              pure acc.reverse
+          loop [first]
+      expectPunct "=>"
+      let body <-
+        if (← consumePunct? "{") then
+          let st <- get
+          set { st with pos := st.pos - 1 }
+          .block <$> parseFunctionBody
+        else
+          .expr <$> parseAssignmentM
+      pure (some (.arrowFunction params body))
+  catch _ =>
+    set st0
+    pure none
+
 private partial def parseAssignmentM : ParserM Expr := do
-  match (← parseArrowFromSingleIdent?) with
+  match (← parseArrowFromParenParams?) with
   | some f => pure f
   | none =>
-    let lhs <- parseConditionalM
-    match (← parseAssignOp?) with
-    | none => pure lhs
-    | some op =>
-      match asAssignTarget lhs with
-      | none =>
-        throw "Invalid assignment target"
-      | some target =>
-        let rhs <- parseAssignmentM
-        pure (.assign op target rhs)
+    match (← parseArrowFromSingleIdent?) with
+    | some f => pure f
+    | none =>
+      let lhs <- parseConditionalM
+      match (← parseAssignOp?) with
+      | none => pure lhs
+      | some op =>
+        match asAssignTarget lhs with
+        | none =>
+          throw "Invalid assignment target"
+        | some target =>
+          let rhs <- parseAssignmentM
+          pure (.assign op target rhs)
 
 private partial def parseExprM : ParserM Expr := do
   let first <- parseAssignmentM
@@ -716,6 +778,59 @@ private partial def parseVarDecls : ParserM (List VarDeclarator) := do
     else
       pure acc.reverse
   loop [first]
+
+private def expectStringLit : ParserM String := do
+  let t <- peek
+  match t.kind with
+  | .string s =>
+    let _ <- bump
+    pure s
+  | _ => failExpected "string literal"
+
+private partial def parseImportNamedSpecifiers : ParserM (List ImportSpecifier) := do
+  expectPunct "{"
+  if (← consumePunct? "}") then
+    pure []
+  else
+    let imported <- parseIdentLike
+    let localName <- if (← consumeWord? "as") then parseIdentLike else pure imported
+    let first : ImportSpecifier := .named imported localName
+    let rec loop (acc : List ImportSpecifier) : ParserM (List ImportSpecifier) := do
+      if (← consumePunct? ",") then
+        if (← consumePunct? "}") then
+          pure acc.reverse
+        else
+          let i <- parseIdentLike
+          let l <- if (← consumeWord? "as") then parseIdentLike else pure i
+          loop (.named i l :: acc)
+      else
+        expectPunct "}"
+        pure acc.reverse
+    loop [first]
+
+private partial def parseImportSpecifiers : ParserM (List ImportSpecifier) := do
+  if (← consumePunct? "*") then
+    expectWord "as"
+    pure [ .namespace (← parseIdentLike) ]
+  else if (← consumePunct? "{") then
+    let st <- get
+    set { st with pos := st.pos - 1 }
+    parseImportNamedSpecifiers
+  else
+    let defaultName <- parseIdentLike
+    let defaultSpec : ImportSpecifier := .default_ defaultName
+    if (← consumePunct? ",") then
+      if (← consumePunct? "*") then
+        expectWord "as"
+        pure [defaultSpec, .namespace (← parseIdentLike)]
+      else if (← consumePunct? "{") then
+        let st <- get
+        set { st with pos := st.pos - 1 }
+        pure (defaultSpec :: (← parseImportNamedSpecifiers))
+      else
+        failExpected "import clause"
+    else
+      pure [defaultSpec]
 
 private def parseForLHSFromExpr (e : Expr) : Except String ForLHS :=
   match parsePatternFromExpr e with
@@ -1027,13 +1142,18 @@ private partial def parseStmt : ParserM Stmt := do
     pure (.varDecl .const_ decls)
   | .kw "import" =>
     let _ <- bump
-    let source <- (do
-      let tk <- peek
-      match tk.kind with
-      | .string s => let _ <- bump; pure s
-      | _ => throw "Only bare string import declarations are currently supported")
-    parseSemiOpt
-    pure (.import_ [] source)
+    let next <- peek
+    match next.kind with
+    | .string _ =>
+      let source <- expectStringLit
+      parseSemiOpt
+      pure (.import_ [] source)
+    | _ =>
+      let specifiers <- parseImportSpecifiers
+      expectWord "from"
+      let source <- expectStringLit
+      parseSemiOpt
+      pure (.import_ specifiers source)
   | .kw "export" =>
     let _ <- bump
     if (← consumeKeyword? "default") then

@@ -66,6 +66,10 @@ def isMemberCallIndex : Expr -> Bool
   | .index (.call (.member (.ident "obj") "prop") [.lit (.number _), .ident "x"]) (.ident "y") => true
   | _ => false
 
+def isParenArrowExpr : Expr -> Bool
+  | .arrowFunction [.ident "a" none, .ident "b" none] (.expr (.binary .add (.ident "a") (.ident "b"))) => true
+  | _ => false
+
 def isLetConstReturn : Program -> Bool
   | .script
       [ .varDecl .let_ [.mk (.ident "x" none) (some (.binary .add (.lit (.number _)) (.lit (.number _))))]
@@ -108,6 +112,17 @@ def isFunctionDecl : Program -> Bool
       ] => true
   | _ => false
 
+def isImportDefaultNamed : Program -> Bool
+  | .script
+      [ .import_
+          [ .default_ "mainDefault"
+          , .named "foo" "foo"
+          , .named "bar" "baz"
+          ]
+          "pkg"
+      ] => true
+  | _ => false
+
 #guard
   match parseExpr "1 + 2 * 3" with
   | .ok e => isMulPrecedence e
@@ -121,6 +136,11 @@ def isFunctionDecl : Program -> Bool
 #guard
   match parseExpr "obj.prop(1, x)[y]" with
   | .ok e => isMemberCallIndex e
+  | .error _ => false
+
+#guard
+  match parseExpr "(a, b) => a + b" with
+  | .ok e => isParenArrowExpr e
   | .error _ => false
 
 #guard
@@ -146,6 +166,11 @@ def isFunctionDecl : Program -> Bool
 #guard
   match parse "function inc(x) { return x + 1; }" with
   | .ok p => isFunctionDecl p
+  | .error _ => false
+
+#guard
+  match parse "import mainDefault, { foo, bar as baz } from \"pkg\";" with
+  | .ok p => isImportDefaultNamed p
   | .error _ => false
 
 #guard
