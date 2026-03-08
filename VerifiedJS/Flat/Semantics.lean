@@ -100,6 +100,28 @@ def evalBinary : Core.BinOp → Value → Value → Value
 private def pushTrace (s : State) (t : Core.TraceEvent) : State :=
   { s with trace := s.trace ++ [t] }
 
+private def allocFreshObject (h : Core.Heap) : Nat × Core.Heap :=
+  let addr := h.nextAddr
+  let h' : Core.Heap :=
+    { objects := h.objects.push [], nextAddr := addr + 1 }
+  (addr, h')
+
+private def typeofValue : Value → Value
+  | .undefined => .string "undefined"
+  | .null => .string "object"
+  | .bool _ => .string "boolean"
+  | .number _ => .string "number"
+  | .string _ => .string "string"
+  | .object _ => .string "object"
+  | .closure _ _ => .string "function"
+
+private def valuesFromExprList? : List Expr → Option (List Value)
+  | [] => some []
+  | e :: rest =>
+      match exprValue? e, valuesFromExprList? rest with
+      | some v, some vs => some (v :: vs)
+      | _, _ => none
+
 /-- One deterministic Flat small-step transition with emitted trace event. -/
 partial def step? (s : State) : Option (Core.TraceEvent × State) :=
   match s.expr with
@@ -193,6 +215,208 @@ partial def step? (s : State) : Option (Core.TraceEvent × State) :=
       let lowered := .«if» cond (.seq body (.while_ cond body)) (.lit .undefined)
       let s' := pushTrace { s with expr := lowered } .silent
       some (.silent, s')
+  | .call funcExpr envExpr args =>
+      match exprValue? funcExpr with
+      | none =>
+          match step? { s with expr := funcExpr } with
+          | some (t, sf) =>
+              let s' := pushTrace
+                { s with expr := .call sf.expr envExpr args, env := sf.env, heap := sf.heap } t
+              some (t, s')
+          | none => none
+      | some _ =>
+          match exprValue? envExpr with
+          | none =>
+              match step? { s with expr := envExpr } with
+              | some (t, se) =>
+                  let s' := pushTrace
+                    { s with expr := .call funcExpr se.expr args, env := se.env, heap := se.heap } t
+                  some (t, s')
+              | none => none
+          | some _ =>
+              match valuesFromExprList? args with
+              | some _ =>
+                  let s' := pushTrace { s with expr := .lit .undefined } .silent
+                  some (.silent, s')
+              | none =>
+                  let rec stepCallArgs (done : List Expr) (todo : List Expr) :
+                      Option (Core.TraceEvent × List Expr × Env × Core.Heap) :=
+                    match todo with
+                    | [] => none
+                    | a :: rest =>
+                        match exprValue? a with
+                        | some _ => stepCallArgs (done ++ [a]) rest
+                        | none =>
+                            match step? { s with expr := a } with
+                            | some (t, sa) => some (t, done ++ (sa.expr :: rest), sa.env, sa.heap)
+                            | none => none
+                  match stepCallArgs [] args with
+                  | some (t, args', env', heap') =>
+                      let s' := pushTrace
+                        { s with expr := .call funcExpr envExpr args', env := env', heap := heap' } t
+                      some (t, s')
+                  | none => none
+  | .newObj funcExpr envExpr args =>
+      match exprValue? funcExpr with
+      | none =>
+          match step? { s with expr := funcExpr } with
+          | some (t, sf) =>
+              let s' := pushTrace
+                { s with expr := .newObj sf.expr envExpr args, env := sf.env, heap := sf.heap } t
+              some (t, s')
+          | none => none
+      | some _ =>
+          match exprValue? envExpr with
+          | none =>
+              match step? { s with expr := envExpr } with
+              | some (t, se) =>
+                  let s' := pushTrace
+                    { s with expr := .newObj funcExpr se.expr args, env := se.env, heap := se.heap } t
+                  some (t, s')
+              | none => none
+          | some _ =>
+              match valuesFromExprList? args with
+              | some _ =>
+                  let (addr, heap') := allocFreshObject s.heap
+                  let s' := pushTrace { s with expr := .lit (.object addr), heap := heap' } .silent
+                  some (.silent, s')
+              | none =>
+                  let rec stepNewObjArgs (done : List Expr) (todo : List Expr) :
+                      Option (Core.TraceEvent × List Expr × Env × Core.Heap) :=
+                    match todo with
+                    | [] => none
+                    | a :: rest =>
+                        match exprValue? a with
+                        | some _ => stepNewObjArgs (done ++ [a]) rest
+                        | none =>
+                            match step? { s with expr := a } with
+                            | some (t, sa) => some (t, done ++ (sa.expr :: rest), sa.env, sa.heap)
+                            | none => none
+                  match stepNewObjArgs [] args with
+                  | some (t, args', env', heap') =>
+                      let s' := pushTrace
+                        { s with expr := .newObj funcExpr envExpr args', env := env', heap := heap' } t
+                      some (t, s')
+                  | none => none
+  | .getProp obj prop =>
+      match exprValue? obj with
+      | some (.object _) =>
+          let _ := prop
+          let s' := pushTrace { s with expr := .lit .undefined } .silent
+          some (.silent, s')
+      | some _ =>
+          let s' := pushTrace { s with expr := .lit .undefined } (.error "TypeError: getProp on non-object")
+          some (.error "TypeError: getProp on non-object", s')
+      | none =>
+          match step? { s with expr := obj } with
+          | some (t, so) =>
+              let s' := pushTrace { s with expr := .getProp so.expr prop, env := so.env, heap := so.heap } t
+              some (t, s')
+          | none => none
+  | .setProp obj prop value =>
+      match exprValue? obj with
+      | none =>
+          match step? { s with expr := obj } with
+          | some (t, so) =>
+              let s' := pushTrace { s with expr := .setProp so.expr prop value, env := so.env, heap := so.heap } t
+              some (t, s')
+          | none => none
+      | some (.object _) =>
+          match exprValue? value with
+          | some v =>
+              let _ := prop
+              let s' := pushTrace { s with expr := .lit v } .silent
+              some (.silent, s')
+          | none =>
+              match step? { s with expr := value } with
+              | some (t, sv) =>
+                  let s' := pushTrace
+                    { s with expr := .setProp obj prop sv.expr, env := sv.env, heap := sv.heap } t
+                  some (t, s')
+              | none => none
+      | some _ =>
+          let s' := pushTrace { s with expr := .lit .undefined } (.error "TypeError: setProp on non-object")
+          some (.error "TypeError: setProp on non-object", s')
+  | .getIndex obj idx =>
+      match exprValue? obj with
+      | none =>
+          match step? { s with expr := obj } with
+          | some (t, so) =>
+              let s' := pushTrace { s with expr := .getIndex so.expr idx, env := so.env, heap := so.heap } t
+              some (t, s')
+          | none => none
+      | some (.object _) =>
+          match exprValue? idx with
+          | some _ =>
+              let s' := pushTrace { s with expr := .lit .undefined } .silent
+              some (.silent, s')
+          | none =>
+              match step? { s with expr := idx } with
+              | some (t, si) =>
+                  let s' := pushTrace { s with expr := .getIndex obj si.expr, env := si.env, heap := si.heap } t
+                  some (t, s')
+              | none => none
+      | some _ =>
+          let s' := pushTrace { s with expr := .lit .undefined } (.error "TypeError: getIndex on non-object")
+          some (.error "TypeError: getIndex on non-object", s')
+  | .setIndex obj idx value =>
+      match exprValue? obj with
+      | none =>
+          match step? { s with expr := obj } with
+          | some (t, so) =>
+              let s' := pushTrace { s with expr := .setIndex so.expr idx value, env := so.env, heap := so.heap } t
+              some (t, s')
+          | none => none
+      | some (.object _) =>
+          match exprValue? idx with
+          | none =>
+              match step? { s with expr := idx } with
+              | some (t, si) =>
+                  let s' := pushTrace
+                    { s with expr := .setIndex obj si.expr value, env := si.env, heap := si.heap } t
+                  some (t, s')
+              | none => none
+          | some _ =>
+              match exprValue? value with
+              | some v =>
+                  let s' := pushTrace { s with expr := .lit v } .silent
+                  some (.silent, s')
+              | none =>
+                  match step? { s with expr := value } with
+                  | some (t, sv) =>
+                      let s' := pushTrace
+                        { s with expr := .setIndex obj idx sv.expr, env := sv.env, heap := sv.heap } t
+                      some (t, s')
+                  | none => none
+      | some _ =>
+          let s' := pushTrace { s with expr := .lit .undefined } (.error "TypeError: setIndex on non-object")
+          some (.error "TypeError: setIndex on non-object", s')
+  | .deleteProp obj prop =>
+      match exprValue? obj with
+      | some (.object _) =>
+          let _ := prop
+          let s' := pushTrace { s with expr := .lit (.bool true) } .silent
+          some (.silent, s')
+      | some _ =>
+          let s' := pushTrace { s with expr := .lit (.bool true) } .silent
+          some (.silent, s')
+      | none =>
+          match step? { s with expr := obj } with
+          | some (t, so) =>
+              let s' := pushTrace { s with expr := .deleteProp so.expr prop, env := so.env, heap := so.heap } t
+              some (t, s')
+          | none => none
+  | .typeof arg =>
+      match exprValue? arg with
+      | some v =>
+          let s' := pushTrace { s with expr := .lit (typeofValue v) } .silent
+          some (.silent, s')
+      | none =>
+          match step? { s with expr := arg } with
+          | some (t, sa) =>
+              let s' := pushTrace { s with expr := .typeof sa.expr, env := sa.env, heap := sa.heap } t
+              some (t, s')
+          | none => none
   | .labeled _ body =>
       let s' := pushTrace { s with expr := body } .silent
       some (.silent, s')
@@ -245,9 +469,155 @@ partial def step? (s : State) : Option (Core.TraceEvent × State) :=
               let s' := pushTrace { s with expr := .getEnv se.expr idx, env := se.env, heap := se.heap } t
               some (t, s')
           | none => none
-  | _ =>
-      let s' := pushTrace { s with expr := .lit .undefined } (.error "unimplemented flat construct")
-      some (.error "unimplemented flat construct", s')
+  | .makeEnv values =>
+      match valuesFromExprList? values with
+      | some _ =>
+          let (addr, heap') := allocFreshObject s.heap
+          let s' := pushTrace { s with expr := .lit (.object addr), heap := heap' } .silent
+          some (.silent, s')
+      | none =>
+          let rec stepValues (done : List Expr) (todo : List Expr) :
+              Option (Core.TraceEvent × List Expr × Env × Core.Heap) :=
+            match todo with
+            | [] => none
+            | e :: rest =>
+                match exprValue? e with
+                | some _ => stepValues (done ++ [e]) rest
+                | none =>
+                    match step? { s with expr := e } with
+                    | some (t, se) => some (t, done ++ (se.expr :: rest), se.env, se.heap)
+                    | none => none
+          match stepValues [] values with
+          | some (t, values', env', heap') =>
+              let s' := pushTrace { s with expr := .makeEnv values', env := env', heap := heap' } t
+              some (t, s')
+          | none => none
+  | .objectLit props =>
+      let vals := props.map Prod.snd
+      match valuesFromExprList? vals with
+      | some _ =>
+          let (addr, heap') := allocFreshObject s.heap
+          let s' := pushTrace { s with expr := .lit (.object addr), heap := heap' } .silent
+          some (.silent, s')
+      | none =>
+          let rec stepProps (done : List (PropName × Expr)) (todo : List (PropName × Expr)) :
+              Option (Core.TraceEvent × List (PropName × Expr) × Env × Core.Heap) :=
+            match todo with
+            | [] => none
+            | (name, e) :: rest =>
+                match exprValue? e with
+                | some _ => stepProps (done ++ [(name, e)]) rest
+                | none =>
+                    match step? { s with expr := e } with
+                    | some (t, se) => some (t, done ++ ((name, se.expr) :: rest), se.env, se.heap)
+                    | none => none
+          match stepProps [] props with
+          | some (t, props', env', heap') =>
+              let s' := pushTrace { s with expr := .objectLit props', env := env', heap := heap' } t
+              some (t, s')
+          | none => none
+  | .arrayLit elems =>
+      match valuesFromExprList? elems with
+      | some _ =>
+          let (addr, heap') := allocFreshObject s.heap
+          let s' := pushTrace { s with expr := .lit (.object addr), heap := heap' } .silent
+          some (.silent, s')
+      | none =>
+          let rec stepElems (done : List Expr) (todo : List Expr) :
+              Option (Core.TraceEvent × List Expr × Env × Core.Heap) :=
+            match todo with
+            | [] => none
+            | e :: rest =>
+                match exprValue? e with
+                | some _ => stepElems (done ++ [e]) rest
+                | none =>
+                    match step? { s with expr := e } with
+                    | some (t, se) => some (t, done ++ (se.expr :: rest), se.env, se.heap)
+                    | none => none
+          match stepElems [] elems with
+          | some (t, elems', env', heap') =>
+              let s' := pushTrace { s with expr := .arrayLit elems', env := env', heap := heap' } t
+              some (t, s')
+          | none => none
+  | .tryCatch body catchParam catchBody finally_ =>
+      match exprValue? body with
+      | some v =>
+          match finally_ with
+          | some fin =>
+              let s' := pushTrace { s with expr := .seq fin (.lit v) } .silent
+              some (.silent, s')
+          | none =>
+              let s' := pushTrace { s with expr := .lit v } .silent
+              some (.silent, s')
+      | none =>
+          match step? { s with expr := body } with
+          | some (.error msg, sb) =>
+              let handler :=
+                match finally_ with
+                | some fin => .seq catchBody fin
+                | none => catchBody
+              let s' := pushTrace
+                { s with expr := handler, env := sb.env.extend catchParam (.string msg), heap := sb.heap } (.error msg)
+              some (.error msg, s')
+          | some (t, sb) =>
+              let s' := pushTrace
+                { s with expr := .tryCatch sb.expr catchParam catchBody finally_, env := sb.env, heap := sb.heap } t
+              some (t, s')
+          | none => none
+  | .«break» label =>
+      let l := label.getD ""
+      let msg := "break:" ++ l
+      let s' := pushTrace { s with expr := .lit .undefined } (.error msg)
+      some (.error msg, s')
+  | .«continue» label =>
+      let l := label.getD ""
+      let msg := "continue:" ++ l
+      let s' := pushTrace { s with expr := .lit .undefined } (.error msg)
+      some (.error msg, s')
+  | .«return» arg =>
+      match arg with
+      | none =>
+          let s' := pushTrace { s with expr := .lit .undefined } .silent
+          some (.silent, s')
+      | some e =>
+          match exprValue? e with
+          | some v =>
+              let s' := pushTrace { s with expr := .lit v } .silent
+              some (.silent, s')
+          | none =>
+              match step? { s with expr := e } with
+              | some (t, se) =>
+                  let s' := pushTrace { s with expr := .«return» (some se.expr), env := se.env, heap := se.heap } t
+                  some (t, s')
+              | none => none
+  | .yield arg delegate =>
+      match arg with
+      | none =>
+          let s' := pushTrace { s with expr := .lit .undefined } .silent
+          some (.silent, s')
+      | some e =>
+          match exprValue? e with
+          | some v =>
+              let s' := pushTrace { s with expr := .lit v } .silent
+              some (.silent, s')
+          | none =>
+              match step? { s with expr := e } with
+              | some (t, se) =>
+                  let s' := pushTrace
+                    { s with expr := .yield (some se.expr) delegate, env := se.env, heap := se.heap } t
+                  some (t, s')
+              | none => none
+  | .await arg =>
+      match exprValue? arg with
+      | some v =>
+          let s' := pushTrace { s with expr := .lit v } .silent
+          some (.silent, s')
+      | none =>
+          match step? { s with expr := arg } with
+          | some (t, sa) =>
+              let s' := pushTrace { s with expr := .await sa.expr, env := sa.env, heap := sa.heap } t
+              some (t, s')
+          | none => none
 
 /-- Small-step relation induced by `step?`.
     ECMA-262 §8.3 execution context stepping. -/

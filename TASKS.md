@@ -29,7 +29,7 @@
 - [ ] Write Wasm.IR.Print pretty-printer
 
 ## Priority 3 (proof work)
-- [ ] Define Flat.Semantics small-step LTS — TODO(supervisor): Replace the fallback `unimplemented flat construct` branch by explicit `step?` rules for every remaining `Flat.Expr` constructor (e.g., `call/newObj/*Prop/*Index/tryCatch/break/continue/return/yield/await/makeEnv/objectLit/arrayLit`).; Repl
+- [x] Define Flat.Semantics small-step LTS — TODO(supervisor): Replace the fallback `unimplemented flat construct` branch by explicit `step?` rules for every remaining `Flat.Expr` constructor (e.g., `call/newObj/*Prop/*Index/tryCatch/break/continue/return/yield/await/makeEnv/objectLit/arrayLit`).; Repl
 - [ ] Define ANF.Semantics small-step LTS
 - [ ] Define Wasm.Semantics (port from WasmCert-Coq)
 - [ ] Prove ElaborateCorrect.lean

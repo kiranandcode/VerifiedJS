@@ -38,3 +38,8 @@ Template:
   Symptom: `grep -v "-- ..."` treats the pattern as an option, causing the sorry report to fail.
   Fix: Pass option-like patterns via `-e`, e.g. `grep -v -e "-- PROVED:"`.
   Guardrail: Any grep pattern starting with `-`/`--` must be wrapped with `-e` (or preceded by `--`) in scripts.
+
+- [2026-03-08] Context: `VerifiedJS/Flat/Semantics.lean`
+  Symptom: Reusing the same `let rec` name in different pattern-match branches of one `partial def` caused `... has already been declared`.
+  Fix: Give each branch-local recursive helper a unique name (`stepCallArgs`, `stepNewObjArgs`, etc.).
+  Guardrail: In a single `def` body, do not repeat local recursive helper names across branches.
