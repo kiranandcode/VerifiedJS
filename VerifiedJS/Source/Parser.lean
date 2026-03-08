@@ -1450,6 +1450,20 @@ private partial def parseStmt : ParserM Stmt := do
 
 end
 
+private partial def recoverStatementBoundary : ParserM Unit := do
+  let rec consumeUntilBoundary : ParserM Unit := do
+    let t ← peek
+    match t.kind with
+    | .eof | .newline | .punct ";" | .punct "}" => pure ()
+    | _ =>
+      let _ ← bump
+      consumeUntilBoundary
+  consumeUntilBoundary
+  if (← consumePunct? ";") then
+    pure ()
+  else
+    pure ()
+
 private partial def parseProgram : ParserM Program := do
   let rec gather (acc : List Stmt) : ParserM (List Stmt) := do
     skipSeparators

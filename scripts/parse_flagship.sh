@@ -47,12 +47,24 @@ if [ ! -d "$FLAGSHIP_DIR" ]; then
   exit 1
 fi
 
-BIN_PATH="${ROOT_DIR}/.lake/build/bin/verifiedjs"
-if [ ! -x "$BIN_PATH" ]; then
-  lake build verifiedjs >/dev/null
+COMMON_GIT_DIR="$(git -C "$ROOT_DIR" rev-parse --git-common-dir 2>/dev/null || true)"
+ALT_ROOT=""
+if [ -n "$COMMON_GIT_DIR" ]; then
+  ALT_ROOT="$(cd "${COMMON_GIT_DIR}/.." && pwd)"
 fi
-if [ ! -x "$BIN_PATH" ]; then
-  echo "ERROR: missing verifiedjs binary at $BIN_PATH"
+
+VERIFIEDJS_BIN="${ROOT_DIR}/.lake/build/bin/verifiedjs"
+if [ ! -x "$VERIFIEDJS_BIN" ] && [ -n "$ALT_ROOT" ] && [ -x "$ALT_ROOT/.lake/build/bin/verifiedjs" ]; then
+  VERIFIEDJS_BIN="$ALT_ROOT/.lake/build/bin/verifiedjs"
+fi
+if [ ! -x "$VERIFIEDJS_BIN" ]; then
+  lake -d "$ROOT_DIR" build verifiedjs >/dev/null 2>&1 || lake -d "$ROOT_DIR" build >/dev/null 2>&1 || true
+fi
+if [ ! -x "$VERIFIEDJS_BIN" ] && [ -n "$ALT_ROOT" ] && [ -x "$ALT_ROOT/.lake/build/bin/verifiedjs" ]; then
+  VERIFIEDJS_BIN="$ALT_ROOT/.lake/build/bin/verifiedjs"
+fi
+if [ ! -x "$VERIFIEDJS_BIN" ]; then
+  echo "ERROR: verifiedjs executable missing after build: $VERIFIEDJS_BIN"
   exit 1
 fi
 
@@ -61,8 +73,7 @@ if [ -n "$PROJECT_FILTER" ]; then
   projects=("$PROJECT_FILTER")
 fi
 
-COMMON_GIT_DIR="$(git -C "$ROOT_DIR" rev-parse --git-common-dir)"
-SHARED_WORKTREE_ROOT="$(cd "${COMMON_GIT_DIR}/.." && pwd)"
+SHARED_WORKTREE_ROOT="$(cd "${COMMON_GIT_DIR}" && cd .. && pwd)"
 SHARED_FLAGSHIP_DIR="${SHARED_WORKTREE_ROOT}/tests/flagship"
 
 TOTAL_SELECTED=0
@@ -110,6 +121,26 @@ for project in "${projects[@]}"; do
     fi
   fi
 
+  project_base="$project_dir"
+  if ! find "$project_base" -type f \( -name "*.js" -o -name "*.mjs" -o -name "*.cjs" \) -print -quit | grep -q .; then
+    alt_project_dir="${ALT_ROOT}/tests/flagship/${project}"
+    if [ -n "$ALT_ROOT" ] && [ -d "$alt_project_dir" ] && \
+       find "$alt_project_dir" -type f \( -name "*.js" -o -name "*.mjs" -o -name "*.cjs" \) -print -quit | grep -q .; then
+      project_base="$alt_project_dir"
+    fi
+  fi
+
+  project_roots=("$project_base")
+  if [ "$INTEGRATION_ONLY" = "1" ]; then
+    if [ -d "$project_base/tests/integration" ]; then
+      project_roots=("$project_base/tests/integration")
+    elif [ -d "$project_base/test" ]; then
+      project_roots=("$project_base/test")
+    elif [ -d "$project_base/tests" ]; then
+      project_roots=("$project_base/tests")
+    fi
+  fi
+
   PROJECT_SELECTED=0
   PROJECT_PASS=0
   PROJECT_FAIL=0
@@ -132,7 +163,7 @@ for project in "${projects[@]}"; do
     fi
 
     PROJECT_SELECTED=$((PROJECT_SELECTED + 1))
-    if "$BIN_PATH" "$file" --parse-only >/dev/null 2>&1; then
+    if "$VERIFIEDJS_BIN" "$file" --parse-only >/dev/null 2>&1; then
       PROJECT_PASS=$((PROJECT_PASS + 1))
       echo "PARSE_PASS $file"
     else
@@ -150,7 +181,12 @@ for project in "${projects[@]}"; do
   TOTAL_FAIL=$((TOTAL_FAIL + PROJECT_FAIL))
   TOTAL_SKIP=$((TOTAL_SKIP + PROJECT_SKIP))
 
-  echo "ParseFlagship[$project]: pass=$PROJECT_PASS fail=$PROJECT_FAIL selected=$PROJECT_SELECTED skipped=$PROJECT_SKIP"
+  if [ "$PROJECT_SELECTED" -gt 0 ]; then
+    PROJECT_RATE=$(awk -v p="$PROJECT_PASS" -v s="$PROJECT_SELECTED" 'BEGIN { printf("%.2f", (100.0 * p) / s) }')
+  else
+    PROJECT_RATE="0.00"
+  fi
+  echo "ParseFlagship[$project]: pass=$PROJECT_PASS fail=$PROJECT_FAIL selected=$PROJECT_SELECTED skipped=$PROJECT_SKIP rate=${PROJECT_RATE}%"
 done
 
 if [ "$TOTAL_SELECTED" -eq 0 ]; then
