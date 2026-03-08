@@ -58,3 +58,8 @@ Template:
   Symptom: `rfl` failed on float encoding examples because `encodeNumber` branches on `Float.isNaN`, which does not always reduce definitionally for literals.
   Fix: Use round-trip examples on tagged values or prove float cases via explicit lemmas/tactics instead of bare `rfl`.
   Guardrail: Avoid `rfl` proofs that depend on normalizing floating-point predicates (`isNaN`/`isFinite`) in conditionals.
+
+- [2026-03-08] Context: `scripts/parse_flagship_failfast.sh` in linked worktrees
+  Symptom: Parser fail-fast gate can report `selected=0` for all projects when local `tests/flagship/*` dirs exist but are empty, because the script does not fall back to the shared flagship checkout in that case.
+  Fix: Use `./scripts/parse_flagship.sh --full` to measure real coverage; treat fail-fast `selected=0` as non-informative until local submodules are populated or script fallback is improved.
+  Guardrail: Always verify parser milestone progress with `parse_flagship.sh --full` (check `selected>0`) before concluding parser coverage status.

@@ -5,7 +5,7 @@
 | Pass | Syntax | Semantics | Interp | Print | Pass Impl | Proof |
 |------|--------|-----------|--------|-------|-----------|-------|
 | Source (AST) | ✅ full ES2020 | N/A | N/A | baseline | N/A | N/A |
-| Lexer/Parser | ✅ | N/A | N/A | N/A | ✅ recursive descent (86.79% flagship coverage) | N/A |
+| Lexer/Parser | ✅ | N/A | N/A | N/A | ✅ recursive descent (95.91% flagship coverage, 1968/2052 on 2026-03-08) | N/A |
 | Core | ✅ | ✅ `step?` | ✅ small-step driver | ✅ full pretty-printer | Elaborate: ✅ (stubs for classes/for-in/destructuring) | stub |
 | Flat | ✅ | ✅ `step?` (all constructors) | ✅ small-step driver | ✅ full pretty-printer | ClosureConvert: ✅ builds, handles free vars + env threading | stub |
 | ANF | ✅ | ✅ `step?`, `Step`, `Steps`, `Behaves` | ✅ small-step driver | ✅ full pretty-printer | Convert: ✅, Optimize: ✅ (identity) | OptimizeCorrect: ✅ |
@@ -51,5 +51,5 @@
 
 - Sorry count: TBD (run `./scripts/sorry_report.sh`)
 - Test262 pass rate: N/A
-- Flagship parse rate: 86.79% (1781/2052)
+- Flagship parse rate: 95.91% (1968/2052)
 - E2E tests: 10 handcrafted JS programs
