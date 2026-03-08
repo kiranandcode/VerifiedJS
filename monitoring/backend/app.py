@@ -186,6 +186,17 @@ def health():
     return jsonify({"ok": True, "timestamp": iso(time.time())})
 
 
+@app.get("/")
+def root():
+    return jsonify(
+        {
+            "service": "verifiedjs-monitor-backend",
+            "ui": "http://127.0.0.1:5174",
+            "endpoints": ["/api/health", "/api/snapshot", "/api/stream", "/api/log/<name>"],
+        }
+    )
+
+
 @app.get("/api/snapshot")
 def api_snapshot():
     return jsonify(snapshot())
