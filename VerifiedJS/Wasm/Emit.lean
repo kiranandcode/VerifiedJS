@@ -32,7 +32,11 @@ private def pow10 (n : Nat) : Float :=
 
 private def parseF64Literal? (raw : String) : Option Float :=
   let s := raw.trimAscii.toString
-  if s = "nan" || s = "NaN" then
+  if s.startsWith "bits:" then
+    match (s.drop 5).toString.toNat? with
+    | some n => some (Float.ofBits (UInt64.ofNat n))
+    | none => none
+  else if s = "nan" || s = "NaN" then
     some (0.0 / 0.0)
   else
     let neg := s.startsWith "-"
@@ -69,7 +73,12 @@ private partial def emitInstr (s : EmitState) : IR.IRInstr → Except String (Li
     | some n => .ok [.i64Const (UInt64.ofNat n)]
     | none => .ok [.i64Const 0]
   | .const_ .f64 v =>
-    .ok [.f64Const (parseF64Literal? v |>.getD 0.0)]
+    if v.trimAscii.toString.startsWith "bits:" then
+      match (v.trimAscii.toString.drop 5).toString.toNat? with
+      | some n => .ok [.i64Const (UInt64.ofNat n), .f64ReinterpretI64]
+      | none => .ok [.f64Const 0.0]
+    else
+      .ok [.f64Const (parseF64Literal? v |>.getD 0.0)]
   | .const_ .ptr v =>
     -- Pointers lowered as i32 constants; symbolic values get 0
     match v.toNat? with
@@ -234,7 +243,13 @@ def emit (m : IR.IRModule) : Except String Module := do
     let initExpr : List Instr := match valType with
       | .i32 => [.i32Const (UInt32.ofNat (initStr.toNat?.getD 0))]
       | .i64 => [.i64Const (UInt64.ofNat (initStr.toNat?.getD 0))]
-      | .f64 => [.f64Const (0.0)]
+      | .f64 =>
+          if initStr.trimAscii.toString.startsWith "bits:" then
+            match (initStr.trimAscii.toString.drop 5).toString.toNat? with
+            | some n => [.i64Const (UInt64.ofNat n), .f64ReinterpretI64]
+            | none => [.f64Const 0.0]
+          else
+            [.f64Const (parseF64Literal? initStr |>.getD 0.0)]
       | .f32 => [.f32Const (0.0)]
     { type := { val := valType, mutability := mutability }, init := initExpr : Global }
 

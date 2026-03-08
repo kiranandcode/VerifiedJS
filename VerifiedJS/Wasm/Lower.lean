@@ -3,6 +3,7 @@
 -/
 
 import VerifiedJS.ANF.Syntax
+import VerifiedJS.Runtime.Values
 import VerifiedJS.Wasm.IR
 
 namespace VerifiedJS.Wasm
@@ -41,6 +42,8 @@ structure LowerCtx where
 structure LowerState where
   nextLocal : Nat
   locals : Array IR.IRType
+  nextStringId : Nat
+  strings : List (String × Nat)
   deriving Inhabited
 
 abbrev LowerM := StateT LowerState (Except String)
@@ -55,6 +58,37 @@ private def allocLocal (name : ANF.VarName) (ctx : LowerCtx) : LowerM (Nat × Lo
   let idx := st.nextLocal
   set { st with nextLocal := idx + 1, locals := st.locals.push .f64 }
   pure (idx, { ctx with locals := (name, idx) :: ctx.locals })
+
+private def mkF64BitsConst (bits : UInt64) : IR.IRInstr :=
+  IR.IRInstr.const_ .f64 s!"bits:{bits.toNat}"
+
+private def mkBoxedConst (v : Runtime.NanBoxed) : IR.IRInstr :=
+  mkF64BitsConst v.bits
+
+private def encodeNatAsInt32 (n : Nat) : Runtime.NanBoxed :=
+  Runtime.NanBoxed.encodeInt32 (Int32.ofInt (Int.ofNat n))
+
+private def encodeBoolBox (b : Bool) : Runtime.NanBoxed :=
+  Runtime.NanBoxed.encodeBool b
+
+private def encodeUndefinedBox : Runtime.NanBoxed :=
+  Runtime.NanBoxed.encodeUndefined
+
+private def encodeNullBox : Runtime.NanBoxed :=
+  Runtime.NanBoxed.encodeNull
+
+private def internString (s : String) : LowerM Nat := do
+  let st ← get
+  match st.strings.find? (fun (name, _) => name = s) with
+  | some (_, idx) => pure idx
+  | none =>
+      let idx := st.nextStringId
+      set { st with nextStringId := idx + 1, strings := (s, idx) :: st.strings }
+      pure idx
+
+private def mkStringRefConstM (s : String) : LowerM IR.IRInstr := do
+  let sid ← internString s
+  pure <| mkBoxedConst (Runtime.NanBoxed.encodeStringRef sid)
 
 private def lowerUnaryOp : Core.UnaryOp → String
   | .neg => "neg"
@@ -89,9 +123,6 @@ private def lowerBinOp : Core.BinOp → String
   | .instanceof => "instanceof"
   | .in => "in"
 
-private def boolAsF64 (b : Bool) : String :=
-  if b then "1.0" else "0.0"
-
 private def drops (n : Nat) : List IR.IRInstr :=
   List.replicate n IR.IRInstr.drop
 
@@ -99,14 +130,17 @@ private def lowerTrivial (ctx : LowerCtx) : ANF.Trivial → Except String (List 
   | .var name => do
       let idx ← lookupLocal ctx name
       pure [IR.IRInstr.localGet idx]
-  -- NaN-boxed placeholder encoding: all JS values are carried as f64 in lowered IR.
-  | .litNull => pure [IR.IRInstr.const_ .f64 "0.0"]
-  | .litUndefined => pure [IR.IRInstr.const_ .f64 "nan"]
-  | .litBool b => pure [IR.IRInstr.const_ .f64 (boolAsF64 b)]
-  | .litNum n => pure [IR.IRInstr.const_ .f64 (toString n)]
-  | .litStr _ => pure [IR.IRInstr.const_ .f64 "nan"]
-  | .litObject addr => pure [IR.IRInstr.const_ .f64 (toString addr)]
-  | .litClosure funcIdx envPtr => pure [IR.IRInstr.const_ .f64 s!"{funcIdx + envPtr}"]
+  -- JS values are carried as NaN-boxed bit patterns reinterpreted as f64.
+  | .litNull => pure [mkBoxedConst encodeNullBox]
+  | .litUndefined => pure [mkBoxedConst encodeUndefinedBox]
+  | .litBool b => pure [mkBoxedConst (encodeBoolBox b)]
+  | .litNum n => pure [mkBoxedConst (Runtime.NanBoxed.encodeNumber n)]
+  | .litStr s => do
+      let sid ← internString s
+      pure [mkBoxedConst (Runtime.NanBoxed.encodeStringRef sid)]
+  | .litObject addr => pure [mkBoxedConst (Runtime.NanBoxed.encodeObjectRef addr)]
+  | .litClosure funcIdx envPtr =>
+      pure [mkBoxedConst (Runtime.NanBoxed.encodeObjectRef (funcIdx * 65536 + envPtr))]
 
 private def lowerTrivialM (ctx : LowerCtx) (t : ANF.Trivial) : LowerM (List IR.IRInstr) :=
   match lowerTrivial ctx t with
@@ -144,14 +178,14 @@ private partial def lowerComplex (ctx : LowerCtx) : ANF.ComplexExpr → LowerM (
           [IR.IRInstr.call RuntimeIdx.construct])
   | .getProp obj prop => do
       let objCode ← lowerTrivialM ctx obj
-      let _ := prop
-      pure (objCode ++ [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.call RuntimeIdx.getProp])
+      let propCode ← mkStringRefConstM prop
+      pure (objCode ++ [propCode, IR.IRInstr.call RuntimeIdx.getProp])
   | .setProp obj prop value => do
       let objCode ← lowerTrivialM ctx obj
       let valCode ← lowerTrivialM ctx value
-      let _ := prop
+      let propCode ← mkStringRefConstM prop
       pure
-        (objCode ++ [IR.IRInstr.const_ .f64 "nan"] ++ valCode ++
+        (objCode ++ [propCode] ++ valCode ++
           [IR.IRInstr.call RuntimeIdx.setProp])
   | .getIndex obj idx => do
       let objCode ← lowerTrivialM ctx obj
@@ -164,27 +198,27 @@ private partial def lowerComplex (ctx : LowerCtx) : ANF.ComplexExpr → LowerM (
       pure (objCode ++ idxCode ++ valCode ++ [IR.IRInstr.call RuntimeIdx.setIndex])
   | .deleteProp obj prop => do
       let objCode ← lowerTrivialM ctx obj
-      let _ := prop
-      pure (objCode ++ [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.call RuntimeIdx.deleteProp])
+      let propCode ← mkStringRefConstM prop
+      pure (objCode ++ [propCode, IR.IRInstr.call RuntimeIdx.deleteProp])
   | .typeof arg => do
       let argCode ← lowerTrivialM ctx arg
       pure (argCode ++ [IR.IRInstr.call RuntimeIdx.typeofOp])
   | .getEnv env idx => do
       let envCode ← lowerTrivialM ctx env
-      pure (envCode ++ [IR.IRInstr.const_ .f64 (toString idx), IR.IRInstr.call RuntimeIdx.getEnv])
+      pure (envCode ++ [mkBoxedConst (encodeNatAsInt32 idx), IR.IRInstr.call RuntimeIdx.getEnv])
   | .makeEnv values => do
       let valuesCode ← lowerTrivialList ctx values
       pure (valuesCode ++ drops values.length ++ [IR.IRInstr.call RuntimeIdx.makeEnv])
   | .makeClosure funcIdx env => do
       let envCode ← lowerTrivialM ctx env
       pure
-        ([IR.IRInstr.const_ .f64 (toString funcIdx)] ++ envCode ++
+        ([mkBoxedConst (encodeNatAsInt32 funcIdx)] ++ envCode ++
           [IR.IRInstr.call RuntimeIdx.makeClosure])
   | .objectLit props => do
       let mut out := []
       for (prop, value) in props do
-        let _ := prop
-        out := out ++ [IR.IRInstr.const_ .f64 "nan"] ++ (← lowerTrivialM ctx value)
+        let propCode ← mkStringRefConstM prop
+        out := out ++ [propCode] ++ (← lowerTrivialM ctx value)
       pure (out ++ drops (2 * props.length) ++ [IR.IRInstr.call RuntimeIdx.objectLit])
   | .arrayLit elems => do
       let elemsCode ← lowerTrivialList ctx elems
@@ -248,10 +282,10 @@ private partial def lowerExpr (ctx : LowerCtx) : ANF.Expr → LowerM (List IR.IR
       let argCode ←
         match arg with
         | some v => lowerTrivialM ctx v
-        | none => pure [IR.IRInstr.const_ .f64 "nan"]
+        | none => pure [mkBoxedConst encodeUndefinedBox]
       pure
         (argCode ++
-          [IR.IRInstr.const_ .f64 (boolAsF64 delegate), IR.IRInstr.call RuntimeIdx.yieldOp])
+          [mkBoxedConst (encodeBoolBox delegate), IR.IRInstr.call RuntimeIdx.yieldOp])
   | .await arg => do
       let argCode ← lowerTrivialM ctx arg
       pure (argCode ++ [IR.IRInstr.call RuntimeIdx.awaitOp])
@@ -298,37 +332,37 @@ private def buildFuncBindings (funcs : Array ANF.FuncDef) (mainBody : ANF.Expr) 
 private def runtimeHelpers : Array IR.IRFunc :=
   #[
     { name := "__rt_call", params := [.f64, .f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] },
     { name := "__rt_construct", params := [.f64, .f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst (Runtime.NanBoxed.encodeObjectRef 0), IR.IRInstr.return_] },
     { name := "__rt_getProp", params := [.f64, .f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] },
     { name := "__rt_setProp", params := [.f64, .f64, .f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] },
     { name := "__rt_getIndex", params := [.f64, .f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] },
     { name := "__rt_setIndex", params := [.f64, .f64, .f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] },
     { name := "__rt_deleteProp", params := [.f64, .f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst (encodeBoolBox true), IR.IRInstr.return_] },
     { name := "__rt_typeof", params := [.f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst (Runtime.NanBoxed.encodeStringRef 0), IR.IRInstr.return_] },
     { name := "__rt_getEnv", params := [.f64, .f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] },
     { name := "__rt_makeEnv", params := [], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst (Runtime.NanBoxed.encodeObjectRef 1), IR.IRInstr.return_] },
     { name := "__rt_makeClosure", params := [.f64, .f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst (Runtime.NanBoxed.encodeObjectRef 2), IR.IRInstr.return_] },
     { name := "__rt_objectLit", params := [], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst (Runtime.NanBoxed.encodeObjectRef 3), IR.IRInstr.return_] },
     { name := "__rt_arrayLit", params := [], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst (Runtime.NanBoxed.encodeObjectRef 4), IR.IRInstr.return_] },
     { name := "__rt_throw", params := [.f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] },
     { name := "__rt_yield", params := [.f64, .f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] },
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] },
     { name := "__rt_await", params := [.f64], results := [.f64], locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.return_] }
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] }
   ]
 
 /-- Lower an ANF program to Wasm IR. ECMA-262 runtime behavior is preserved structurally via ANF sequencing (§13). -/
@@ -350,7 +384,7 @@ def lower (prog : ANF.Program) : Except String IR.IRModule := do
       params := []
       results := []
       locals := []
-      body := [IR.IRInstr.const_ .f64 "nan", IR.IRInstr.call mainIdx, IR.IRInstr.drop] }
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.call mainIdx, IR.IRInstr.drop] }
   let startIdx := mainIdx + 1
   let functions := runtimeHelpers ++ loweredFns.toArray ++ #[loweredMain, startWrapper]
   pure
