@@ -30,19 +30,19 @@ def commentIsIgnored (toks : List Token) : Bool :=
     ] => true
   | _ => false
 
-def isMulPrecedence : Expr → Bool
+def isMulPrecedence : Expr -> Bool
   | .binary .add (.lit (.number _)) (.binary .mul (.lit (.number _)) (.lit (.number _))) => true
   | _ => false
 
-def isAssignAdd : Expr → Bool
+def isAssignAdd : Expr -> Bool
   | .assign .assign (.ident "a") (.binary .add (.ident "b") (.ident "c")) => true
   | _ => false
 
-def isMemberCallIndex : Expr → Bool
+def isMemberCallIndex : Expr -> Bool
   | .index (.call (.member (.ident "obj") "prop") [.lit (.number _), .ident "x"]) (.ident "y") => true
   | _ => false
 
-def isLetConstReturn : Program → Bool
+def isLetConstReturn : Program -> Bool
   | .script
       [ .varDecl .let_ [.mk (.ident "x" none) (some (.binary .add (.lit (.number _)) (.lit (.number _))))]
       , .varDecl .const_ [.mk (.ident "y" none) (some (.ident "x"))]
@@ -50,12 +50,37 @@ def isLetConstReturn : Program → Bool
       ] => true
   | _ => false
 
-def isBlockWithAssign : Program → Bool
+def isBlockWithAssign : Program -> Bool
   | .script
       [ .block
         [ .varDecl .let_ [.mk (.ident "x" none) (some (.lit (.number _)))]
         , .expr (.assign .assign (.ident "x") (.binary .add (.ident "x") (.lit (.number _))))
         ]
+      ] => true
+  | _ => false
+
+def isIfElseStmt : Program -> Bool
+  | .script
+      [ .if (.binary .lt (.ident "x") (.lit (.number _)))
+          (.block [.return (some (.ident "x"))])
+          (some (.block [.return (some (.lit (.number _)))]))
+      ] => true
+  | _ => false
+
+def isForStmt : Program -> Bool
+  | .script
+      [ .for (some (.varDecl .let_ [.mk (.ident "i" none) (some (.lit (.number _)))]))
+          (some (.binary .lt (.ident "i") (.lit (.number _))))
+          (some (.assign .assign (.ident "i") (.binary .add (.ident "i") (.lit (.number _)))))
+          (.block [.expr (.call (.member (.ident "console") "log") [.ident "i"])])
+      ] => true
+  | _ => false
+
+def isFunctionDecl : Program -> Bool
+  | .script
+      [ .functionDecl "inc" [.ident "x" none]
+          [ .return (some (.binary .add (.ident "x") (.lit (.number _)))) ]
+          false false
       ] => true
   | _ => false
 
@@ -82,6 +107,21 @@ def isBlockWithAssign : Program → Bool
 #guard
   match parse "{ let x = 1; x = x + 1; }" with
   | .ok p => isBlockWithAssign p
+  | .error _ => false
+
+#guard
+  match parse "if (x < 1) { return x; } else { return 0; }" with
+  | .ok p => isIfElseStmt p
+  | .error _ => false
+
+#guard
+  match parse "for (let i = 0; i < 3; i = i + 1) { console.log(i); }" with
+  | .ok p => isForStmt p
+  | .error _ => false
+
+#guard
+  match parse "function inc(x) { return x + 1; }" with
+  | .ok p => isFunctionDecl p
   | .error _ => false
 
 #guard
