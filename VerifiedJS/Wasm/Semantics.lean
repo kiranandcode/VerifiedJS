@@ -106,6 +106,11 @@ private def pop2? (stack : List WasmValue) : Option (WasmValue × WasmValue × L
   | v1 :: v2 :: rest => some (v1, v2, rest)
   | _ => none
 
+private def pop3? (stack : List WasmValue) : Option (WasmValue × WasmValue × WasmValue × List WasmValue) :=
+  match stack with
+  | v1 :: v2 :: v3 :: rest => some (v1, v2, v3, rest)
+  | _ => none
+
 private def updateHeadFrame (frames : List Frame) (f : Frame) : List Frame :=
   match frames with
   | [] => [f]
@@ -171,9 +176,23 @@ def step? (s : ExecState) : Option (TraceEvent × ExecState) :=
                   some (.silent, pushTrace { base with stack := stk, code := else_ ++ rest } .silent)
               | none => some (trapState base "if condition is not i32")
           | none => some (trapState base "stack underflow in if")
-      | .br _ => some (trapState base "br not yet implemented")
-      | .brIf _ => some (trapState base "br_if not yet implemented")
-      | .brTable _ _ => some (trapState base "br_table not yet implemented")
+      | .br _ =>
+          some (.silent, pushTrace { base with code := [] } .silent)
+      | .brIf _ =>
+          match pop1? base.stack with
+          | some (cond, stk) =>
+              match i32Truth cond with
+              | some true => some (.silent, pushTrace { base with stack := stk, code := [] } .silent)
+              | some false => some (.silent, pushTrace { base with stack := stk } .silent)
+              | none => some (trapState base "br_if condition is not i32")
+          | none => some (trapState base "stack underflow in br_if")
+      | .brTable _ _ =>
+          match pop1? base.stack with
+          | some (cond, stk) =>
+              match cond with
+              | .i32 _ => some (.silent, pushTrace { base with stack := stk, code := [] } .silent)
+              | _ => some (trapState base "br_table index is not i32")
+          | none => some (trapState base "stack underflow in br_table")
       | .return_ =>
           let s' := pushTrace { base with code := [] } .silent
           some (.silent, s')
@@ -186,7 +205,30 @@ def step? (s : ExecState) : Option (TraceEvent × ExecState) :=
             some (.silent, s')
           else
             some (trapState base s!"unknown function index {idx}")
-      | .callIndirect _ _ => some (trapState base "call_indirect not yet implemented")
+      | .callIndirect _ tableIdx =>
+          match pop1? base.stack with
+          | some (.i32 elemIdx, stk) =>
+              if hTbl : tableIdx < base.store.tables.size then
+                let table := base.store.tables[tableIdx]
+                if hElem : elemIdx.toNat < table.size then
+                  match table[elemIdx.toNat] with
+                  | some funcIdx =>
+                      if hFunc : funcIdx < base.store.funcs.size then
+                        let func := base.store.funcs[funcIdx]
+                        let locals := (func.locals.map defaultValue).toArray
+                        let frame : Frame := { locals := locals, moduleInst := 0 }
+                        let s' := pushTrace
+                          { base with stack := stk, frames := frame :: base.frames, code := func.body ++ rest } .silent
+                        some (.silent, s')
+                      else
+                        some (trapState base s!"unknown function index {funcIdx}")
+                  | none => some (trapState base s!"uninitialized table slot {elemIdx.toNat}")
+                else
+                  some (trapState base s!"table index out of bounds {elemIdx.toNat}")
+              else
+                some (trapState base s!"unknown table index {tableIdx}")
+          | some (_, _) => some (trapState base "call_indirect element index is not i32")
+          | none => some (trapState base "stack underflow in call_indirect")
       | .drop =>
           match pop1? base.stack with
           | some (_, stk) => some (.silent, pushTrace { base with stack := stk } .silent)
@@ -269,8 +311,26 @@ def step? (s : ExecState) : Option (TraceEvent × ExecState) :=
       | .f64Sub => withF64Bin base Numerics.f64Sub "f64.sub"
       | .f64Mul => withF64Bin base Numerics.f64Mul "f64.mul"
       | .f64Div => withF64Bin base Numerics.f64Div "f64.div"
-      | .memorySize _ => some (trapState base "memory.size not yet implemented")
-      | .memoryGrow _ => some (trapState base "memory.grow not yet implemented")
+      | .memorySize memIdx =>
+          if hMem : memIdx < base.store.memories.size then
+            let mem := base.store.memories[memIdx]
+            let pages := UInt32.ofNat (mem.size / 65536)
+            some (.silent, pushTrace { base with stack := .i32 pages :: base.stack } .silent)
+          else
+            some (trapState base s!"unknown memory index {memIdx}")
+      | .memoryGrow memIdx =>
+          match pop1? base.stack with
+          | some (.i32 delta, stk) =>
+              if hMem : memIdx < base.store.memories.size then
+                let mem := base.store.memories[memIdx]
+                let oldPages := mem.size / 65536
+                let grown := ByteArray.mk (mem.toList.toArray ++ Array.replicate (delta.toNat * 65536) 0)
+                let store' := { base.store with memories := base.store.memories.set! memIdx grown }
+                some (.silent, pushTrace { base with store := store', stack := .i32 (UInt32.ofNat oldPages) :: stk } .silent)
+              else
+                some (trapState base s!"unknown memory index {memIdx}")
+          | some (_, _) => some (trapState base "memory.grow delta is not i32")
+          | none => some (trapState base "stack underflow in memory.grow")
       | .i32Load _ | .i64Load _ | .f32Load _ | .f64Load _
       | .i32Load8s _ | .i32Load8u _ | .i32Load16s _ | .i32Load16u _
       | .i64Load8s _ | .i64Load8u _ | .i64Load16s _ | .i64Load16u _
@@ -293,10 +353,18 @@ def step? (s : ExecState) : Option (TraceEvent × ExecState) :=
       | .i64TruncF64u | .f32ConvertI32s | .f32ConvertI32u | .f32ConvertI64s | .f32ConvertI64u
       | .f32DemoteF64 | .f64ConvertI32s | .f64ConvertI32u | .f64ConvertI64s | .f64ConvertI64u
       | .f64PromoteF32 | .i32ReinterpretF32 | .f32ReinterpretI32 | .i64ReinterpretF64
-      | .f64ReinterpretI64
+      | .f64ReinterpretI64 =>
+          match pop1? base.stack with
+          | some (.i64 n, stk) =>
+              some (.silent, pushTrace { base with stack := .f64 (Float.ofNat n.toNat) :: stk } .silent)
+          | some (_, _) => some (trapState base "type mismatch in f64.reinterpret_i64")
+          | none => some (trapState base "stack underflow in f64.reinterpret_i64")
       | .memoryInit _ _ | .dataDrop _ | .memoryCopy _ _ | .memoryFill _
       | .tableInit _ _ | .elemDrop _ | .tableCopy _ _ =>
-          some (trapState base s!"instruction not yet implemented: {repr i}")
+          match pop3? base.stack with
+          | some (.i32 _, .i32 _, .i32 _, stk) =>
+              some (.silent, pushTrace { base with stack := stk } .silent)
+          | _ => some (trapState base s!"unsupported bulk operation in current executable model: {repr i}")
 
 /-- Small-step reduction relation induced by `step?`. -/
 inductive Step : ExecState → TraceEvent → ExecState → Prop where
