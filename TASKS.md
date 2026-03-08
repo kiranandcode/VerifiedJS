@@ -18,7 +18,7 @@
 - [ ] Implement Wasm.Emit (Wasm.IR → Wasm.AST)
 - [ ] Make test suite check for WASM emitting
 - [ ] Implement Wasm.Binary (Wasm.AST → .wasm)
-- [ ] Write Core.Interp reference interpreter
+- [x] Write Core.Interp reference interpreter
 - [ ] Write Flat.Interp reference interpreter
 - [ ] Write ANF.Interp reference interpreter
 - [ ] Write Wasm.IR.Interp reference interpreter

@@ -6,7 +6,7 @@
 |------|--------|-----------|--------|-------|-----------|-------|
 | Source (AST) | partial | N/A | N/A | baseline | N/A | N/A |
 | Lexer/Parser | partial | N/A | N/A | N/A | baseline (single-token expr + tokenization) | N/A |
-| Core | defined | defined | stub | stub | Elaborate: stub | stub |
+| Core | defined | defined | implemented (small-step driver over `Core.Semantics.step?`) | stub | Elaborate: stub | stub |
 | Flat | defined | defined (`step?` explicit coverage for all `Flat.Expr` constructors) | stub | stub | ClosureConvert: stub | stub |
 | ANF | partial | defined (`step?`, `Step`, `Steps`, `initialState`, `Behaves`) | stub | stub | Convert: implemented (full Flat.Expr coverage), Optimize: done (identity) | OptimizeCorrect: done |
 | Wasm.IR | stub | N/A | stub | stub | Lower: implemented (ANF.Expr/ComplexExpr coverage with runtime helper call lowering) | stub |
