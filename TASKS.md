@@ -6,7 +6,7 @@
 - [ ] Define JS.Core.Semantics small-step LTS
 - [ ] Make test suite cover more the LTS
 - [ ] Define JS.ANF.Syntax inductive types
-- [ ] Define Wasm.Syntax (port from WasmCert-Coq) — TODO(supervisor): Move `Define Wasm.Syntax (port from WasmCert-Coq)` into `Validated Completed (Supervisor)` in `TASKS.md` after supervisor validation.
+- [x] Define Wasm.Syntax (port from WasmCert-Coq) — DONE by agent supervisor
 - [ ] Make test suite check the ANF converstion
 
 ## Priority 2 (important — passes and interpreters)
