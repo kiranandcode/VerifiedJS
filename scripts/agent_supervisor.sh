@@ -133,6 +133,34 @@ run_or_echo() {
   fi
 }
 
+commit_supervisor_task_updates() {
+  local msg="${1:-supervisor: sync task bookkeeping}"
+
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    echo "[dry-run] git -C ${ROOT_DIR} add -- ${TASKS_FILE}"
+    echo "[dry-run] git -C ${ROOT_DIR} commit -m \"${msg}\""
+    return 0
+  fi
+
+  if git -C "${ROOT_DIR}" rev-parse --verify --quiet MERGE_HEAD >/dev/null; then
+    echo "WARN: merge in progress; deferring task bookkeeping commit (${TASKS_FILE})" >&2
+    return 1
+  fi
+
+  git -C "${ROOT_DIR}" add -- "${TASKS_FILE}" >/dev/null 2>&1 || true
+  if git -C "${ROOT_DIR}" diff --cached --quiet; then
+    return 0
+  fi
+
+  if git -C "${ROOT_DIR}" commit -m "${msg}" >/dev/null 2>&1; then
+    echo "INFO: committed supervisor task-file updates (${TASKS_FILE})"
+    return 0
+  fi
+
+  echo "WARN: failed to commit supervisor task-file updates (${TASKS_FILE})" >&2
+  return 1
+}
+
 hash_text() {
   local s="$1"
   if command -v shasum >/dev/null 2>&1; then
@@ -1323,6 +1351,9 @@ spawn_round() {
     local ahead=0
     local integrated=0
 
+    # Keep task bookkeeping committed between agent merges to avoid dirty-tree merge failures.
+    commit_supervisor_task_updates "supervisor: sync task bookkeeping before merge (${task_id})" || true
+
     if [[ "${st}" -eq 0 && "${DRY_RUN}" -eq 0 ]]; then
       if run_task_symbolic_validation "${task_text}" "${wt}" "${log}"; then
         echo "INFO: symbolic validation passed for task: ${task_text}" >>"${log}"
@@ -1377,6 +1408,8 @@ spawn_round() {
     echo "AGENT ${run_id}: exit=${st} task='${task_text}' log=${log}"
   done
 
+  commit_supervisor_task_updates "supervisor: sync round task bookkeeping (round ${round})" || true
+
   return 0
 }
 
@@ -1409,6 +1442,7 @@ run_spawn_mode() {
   setup
   spawn_round 1 || true
   review_checked_tasks_with_validators 1 || true
+  commit_supervisor_task_updates "supervisor: persist validator task updates (round 1)" || true
 }
 
 run_supervise_mode() {
@@ -1426,6 +1460,7 @@ run_supervise_mode() {
     fi
 
     review_checked_tasks_with_validators "${round}" || true
+    commit_supervisor_task_updates "supervisor: persist validator task updates (round ${round})" || true
 
     if run_test_cmd "${round}"; then
       if [[ "${STOP_ON_PASS}" -eq 1 ]]; then
