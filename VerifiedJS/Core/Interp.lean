@@ -22,6 +22,13 @@ def maxSteps : Nat := 1000000
 
 /-- Interpret a Core expression -/
 def interp (prog : Program) (fuel : Nat := maxSteps) : IO (List TraceEvent) :=
-  sorry -- TODO: Implement reference interpreter
+  let rec run (remaining : Nat) (s : State) (acc : List TraceEvent) : List TraceEvent :=
+    match remaining with
+    | 0 => acc ++ [.error "Interpreter fuel exhausted"]
+    | n + 1 =>
+        match step? s with
+        | none => acc
+        | some (t, s') => run n s' (acc ++ [t])
+  pure <| run fuel (initialState prog) []
 
 end VerifiedJS.Core
