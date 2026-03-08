@@ -233,6 +233,168 @@ release_task_lock() {
   rm -rf "${lock_path}"
 }
 
+file_has_sorry() {
+  local file="$1"
+  rg -n "sorry" "${file}" >/dev/null 2>&1
+}
+
+run_validation_cmd() {
+  local wt="$1"
+  local log="$2"
+  local label="$3"
+  local cmd="$4"
+
+  echo "VALIDATE: ${label}"
+  echo "VALIDATE: ${label}" >>"${log}"
+  echo "  cmd: ${cmd}" >>"${log}"
+
+  if (cd "${wt}" && bash -lc "${cmd}") >>"${log}" 2>&1; then
+    return 0
+  fi
+  echo "VALIDATE_FAIL: ${label}" | tee -a "${log}"
+  return 1
+}
+
+run_task_symbolic_validation() {
+  local task_text="$1"
+  local wt="$2"
+  local log="$3"
+
+  local t
+  t="$(printf '%s' "${task_text}" | tr '[:upper:]' '[:lower:]')"
+
+  echo "VALIDATE: selecting symbolic gates for task: ${task_text}" >>"${log}"
+
+  # Phase 0: Parser / Lexer / AST
+  if [[ "${t}" == *"parser milestone: parse"* ]] || [[ "${t}" == *"parse ≥95%"* ]] || [[ "${t}" == *"parse >=95%"* ]]; then
+    run_validation_cmd "${wt}" "${log}" "parser full flagship fail-fast gate" "./scripts/parse_flagship_failfast.sh --full" || return 1
+    return 0
+  fi
+  if [[ "${t}" == *"js.source.parser"* ]] || [[ "${t}" == *"js.source.lexer"* ]] || [[ "${t}" == *"js.source.ast"* ]] || [[ "${t}" == *"parser"* ]] || [[ "${t}" == *"lexer"* ]]; then
+    run_validation_cmd "${wt}" "${log}" "parser smoke gate prettier" "./scripts/parse_flagship_failfast.sh --project prettier --sample-per-project 200" || return 1
+    run_validation_cmd "${wt}" "${log}" "parser smoke gate babel" "./scripts/parse_flagship_failfast.sh --project babel --sample-per-project 200" || return 1
+    run_validation_cmd "${wt}" "${log}" "parser smoke gate TypeScript" "./scripts/parse_flagship_failfast.sh --project TypeScript --sample-per-project 200" || return 1
+  fi
+
+  # Phase 1/2 interfaces and implementations.
+  case "${t}" in
+    *"js.core.syntax"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Core.Syntax" "lake build VerifiedJS.Core.Syntax" || return 1
+      ;;
+    *"js.core.semantics"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Core.Semantics" "lake build VerifiedJS.Core.Semantics" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Core/Semantics.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Core/Semantics.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"js.flat.syntax"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Flat.Syntax" "lake build VerifiedJS.Flat.Syntax" || return 1
+      ;;
+    *"js.anf.syntax"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.ANF.Syntax" "lake build VerifiedJS.ANF.Syntax" || return 1
+      ;;
+    *"wasm.syntax"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Wasm.Syntax" "lake build VerifiedJS.Wasm.Syntax" || return 1
+      ;;
+    *"core.elaborate"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Core.Elaborate" "lake build VerifiedJS.Core.Elaborate" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Core/Elaborate.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Core/Elaborate.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"flat.closureconvert"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Flat.ClosureConvert" "lake build VerifiedJS.Flat.ClosureConvert" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Flat/ClosureConvert.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Flat/ClosureConvert.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"anf.convert"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.ANF.Convert" "lake build VerifiedJS.ANF.Convert" || return 1
+      file_has_sorry "${wt}/VerifiedJS/ANF/Convert.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/ANF/Convert.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"wasm.lower"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Wasm.Lower" "lake build VerifiedJS.Wasm.Lower" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Wasm/Lower.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Wasm/Lower.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"wasm.emit"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Wasm.Emit" "lake build VerifiedJS.Wasm.Emit" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Wasm/Emit.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Wasm/Emit.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"wasm.binary"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Wasm.Binary" "lake build VerifiedJS.Wasm.Binary" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Wasm/Binary.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Wasm/Binary.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"core.interp"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Core.Interp" "lake build VerifiedJS.Core.Interp" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Core/Interp.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Core/Interp.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"flat.interp"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Flat.Interp" "lake build VerifiedJS.Flat.Interp" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Flat/Interp.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Flat/Interp.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"anf.interp"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.ANF.Interp" "lake build VerifiedJS.ANF.Interp" || return 1
+      file_has_sorry "${wt}/VerifiedJS/ANF/Interp.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/ANF/Interp.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"wasm.ir.interp"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Wasm.IRInterp" "lake build VerifiedJS.Wasm.IRInterp" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Wasm/IRInterp.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Wasm/IRInterp.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"core.print"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Core.Print" "lake build VerifiedJS.Core.Print" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Core/Print.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Core/Print.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"flat.print"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Flat.Print" "lake build VerifiedJS.Flat.Print" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Flat/Print.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Flat/Print.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"anf.print"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.ANF.Print" "lake build VerifiedJS.ANF.Print" || return 1
+      file_has_sorry "${wt}/VerifiedJS/ANF/Print.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/ANF/Print.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"wasm.print"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Wasm.Print" "lake build VerifiedJS.Wasm.Print" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Wasm/Print.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Wasm/Print.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"wasm.ir.print"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Wasm.IRPrint" "lake build VerifiedJS.Wasm.IRPrint" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Wasm/IRPrint.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Wasm/IRPrint.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"flat.semantics"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Flat.Semantics" "lake build VerifiedJS.Flat.Semantics" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Flat/Semantics.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Flat/Semantics.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"anf.semantics"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.ANF.Semantics" "lake build VerifiedJS.ANF.Semantics" || return 1
+      file_has_sorry "${wt}/VerifiedJS/ANF/Semantics.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/ANF/Semantics.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"wasm.semantics"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Wasm.Semantics" "lake build VerifiedJS.Wasm.Semantics" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Wasm/Semantics.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Wasm/Semantics.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"elaboratecorrect"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Proofs.ElaborateCorrect" "lake build VerifiedJS.Proofs.ElaborateCorrect" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Proofs/ElaborateCorrect.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Proofs/ElaborateCorrect.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"closureconvertcorrect"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Proofs.ClosureConvertCorrect" "lake build VerifiedJS.Proofs.ClosureConvertCorrect" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Proofs/ClosureConvertCorrect.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Proofs/ClosureConvertCorrect.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"anfconvertcorrect"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Proofs.ANFConvertCorrect" "lake build VerifiedJS.Proofs.ANFConvertCorrect" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Proofs/ANFConvertCorrect.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Proofs/ANFConvertCorrect.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"lowercorrect"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Proofs.LowerCorrect" "lake build VerifiedJS.Proofs.LowerCorrect" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Proofs/LowerCorrect.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Proofs/LowerCorrect.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"emitcorrect"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Proofs.EmitCorrect" "lake build VerifiedJS.Proofs.EmitCorrect" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Proofs/EmitCorrect.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Proofs/EmitCorrect.lean" | tee -a "${log}"; return 1; }
+      ;;
+    *"endtoend"*|*"compose endtoend.lean"*)
+      run_validation_cmd "${wt}" "${log}" "build VerifiedJS.Proofs.EndToEnd" "lake build VerifiedJS.Proofs.EndToEnd" || return 1
+      file_has_sorry "${wt}/VerifiedJS/Proofs/EndToEnd.lean" && { echo "VALIDATE_FAIL: sorry remains in VerifiedJS/Proofs/EndToEnd.lean" | tee -a "${log}"; return 1; }
+      ;;
+  esac
+
+  return 0
+}
+
 parse_args() {
   MODE="${1:-}"
   if [[ -z "${MODE}" || "${MODE}" == "-h" || "${MODE}" == "--help" ]]; then
@@ -709,6 +871,17 @@ spawn_round() {
     local st="${statuses[$idx]}"
     local ahead=0
     local integrated=0
+
+    if [[ "${st}" -eq 0 && "${DRY_RUN}" -eq 0 ]]; then
+      if run_task_symbolic_validation "${task_text}" "${wt}" "${log}"; then
+        echo "INFO: symbolic validation passed for task: ${task_text}" >>"${log}"
+      else
+        st=86
+        echo "WARN: symbolic validation failed for task: ${task_text}" >>"${log}"
+        echo "WARN: symbolic validation failed for ${branch}; task will not be checked off"
+      fi
+    fi
+
     if [[ "${DRY_RUN}" -eq 0 ]]; then
       ahead="$(git -C "${ROOT_DIR}" rev-list --count "HEAD..${branch}" 2>/dev/null || echo 0)"
     fi
@@ -731,7 +904,11 @@ spawn_round() {
       echo "WARN: task has commits but is not integrated into main; left as pending_merge: ${task_id}" >>"${log}"
     else
       TOTAL_FAIL=$((TOTAL_FAIL + 1))
-      SUMMARY_FAIL+=("${task_text}")
+      if [[ "${st}" -eq 86 ]]; then
+        SUMMARY_FAIL+=("${task_text} (symbolic validation failed)")
+      else
+        SUMMARY_FAIL+=("${task_text}")
+      fi
       release_task_lock "${task_id}"
       if [[ "${st}" -eq 0 && "${DRY_RUN}" -eq 0 && "${ahead}" -eq 0 ]]; then
         echo "WARN: agent exited 0 but made no commits on ${branch}; treating as failed" >>"${log}"

@@ -752,6 +752,7 @@ git submodule update --init --recursive          # fetch all submodules (test262
 
 `scripts/agent_supervisor.sh` assigns tasks centrally from `TASKS.md` and uses atomic local locks in `.agent_locks/` to prevent duplicate task claims across parallel worktrees.
 At the end of each run it prints a supervisor summary (rounds, agent exits, test status, completed/failed task list, log paths).
+It also applies phase-aware symbolic validation before checking off tasks (e.g., parser fail-fast gates for parser tasks, module build + no-`sorry` checks for semantics/proof milestones).
 
 ---
 
