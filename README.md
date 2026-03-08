@@ -161,7 +161,7 @@ The parser is **outside the verified TCB**. Validate by:
 - Test262 parse-only tests
 - Round-trip: `parse ∘ print ≈ id` on the AST
 - Differential: parse with VerifiedJS, parse with Acorn/Babel, compare ASTs
-- Fail-fast flagship parser gate (benchmark-first): `./scripts/parse_flagship_failfast.sh --sample 0.02`
+- Fail-fast flagship parser gate (benchmark-first, project-by-project smoke): run `./scripts/parse_flagship_failfast.sh --project prettier --sample-per-project 200`, then `--project babel --sample-per-project 200`, then `--project TypeScript --sample-per-project 200`
 - Completion gate: `./scripts/parse_flagship_failfast.sh --full` (all flagship JS files)
 - Long-sequence integration sweep: `./scripts/parse_flagship.sh --full --integration-only`
 
@@ -423,7 +423,7 @@ Every agent, on every spawn, does this:
 4. Read `ARCHITECTURE.md` to understand the current state.
 5. Read `PROGRESS.md` to understand what's done and what's in flight.
 6. If the task is proof work, read `PROOF_BLOCKERS.md` to avoid repeating failed attempts.
-7. Do the task. Run `./tests/run_tests.sh --fast` before pushing. If the task touches parser/lexer/AST, also run `./scripts/parse_flagship_failfast.sh --sample 0.02` (and `--full` when validating parser completion/regression fixes).
+7. Do the task. Run `./tests/run_tests.sh --fast` before pushing. If the task touches parser/lexer/AST, also run project-by-project parser smoke gates with `./scripts/parse_flagship_failfast.sh --project prettier --sample-per-project 200`, then `--project babel --sample-per-project 200`, then `--project TypeScript --sample-per-project 200` (and `--full` when validating parser completion/regression fixes).
 8. Update `TASKS.md` (mark done), `PROGRESS.md` (update status), and `SORRY_REPORT.md` (run script).
    If the task revealed additional required work, append those new tasks to `TASKS.md` before exiting.
 9. Remove lock. Push. Clean up worktree (`git worktree remove`). Exit.
@@ -479,7 +479,7 @@ Pre-compute aggregate statistics. Never make the agent count things manually.
 
 **The problem**: Agents can be time-blind and may spend far too long running tests.
 
-**Mitigation**: Keep `--fast` short and run heavyweight checks only in `--full`. For parser work, run fail-fast coverage first via `./scripts/parse_flagship_failfast.sh --sample 0.02` (benchmark-first), then confirm with `./scripts/parse_flagship_failfast.sh --full`. Long-sequence integration sweeps remain `./scripts/parse_flagship.sh --full --integration-only`. The test harness prints wall-clock elapsed time and warns after 5 minutes:
+**Mitigation**: Keep `--fast` short and run heavyweight checks only in `--full`. For parser work, run fail-fast coverage first via project-by-project smoke gates (`prettier`, then `babel`, then `TypeScript`) using `./scripts/parse_flagship_failfast.sh --project <name> --sample-per-project 200`, then confirm with `./scripts/parse_flagship_failfast.sh --full`. Long-sequence integration sweeps remain `./scripts/parse_flagship.sh --full --integration-only`. The test harness prints wall-clock elapsed time and warns after 5 minutes:
 
 ```bash
 if [ "$SECONDS" -gt 300 ]; then
@@ -736,7 +736,9 @@ lake exe verifiedjs input.js --run=anf          # interpret at ANF
 lake test                                        # Lean unit tests
 ./tests/run_tests.sh --fast                      # lightweight regression checks
 ./tests/run_tests.sh --full                      # full suites (includes flagship parse integration sweep)
-./scripts/parse_flagship_failfast.sh --sample 0.02         # parser fail-fast gate (benchmark-first sample)
+./scripts/parse_flagship_failfast.sh --project prettier --sample-per-project 200   # parser smoke gate 1 (benchmark-first)
+./scripts/parse_flagship_failfast.sh --project babel --sample-per-project 200      # parser smoke gate 2
+./scripts/parse_flagship_failfast.sh --project TypeScript --sample-per-project 200  # parser smoke gate 3 (heaviest last)
 ./scripts/parse_flagship_failfast.sh --full                # parser completion gate (all flagship JS files)
 ./scripts/parse_flagship.sh --full --integration-only  # long-sequence parser gate
 ./scripts/sorry_report.sh                        # sorry report
@@ -761,7 +763,7 @@ At the end of each run it prints a supervisor summary (rounds, agent exits, test
 4. **Automation first in proofs.** Try `decide`/`simp`/`omega`/`grind`/`canonical`/`aesop` before manual proof.
 5. **Use the LSP.** Query diagnostics, goal states, hover, LeanSearch/Loogle.
 6. **Every change must pass `./tests/run_tests.sh --fast`.** No regressions.
-7. **Parser/lexer/AST changes must run parser fail-fast gate**: `./scripts/parse_flagship_failfast.sh --sample 0.02`; use `--full` before claiming parser completion.
+7. **Parser/lexer/AST changes must run parser fail-fast gates**: run project-by-project smoke gates (`prettier`, `babel`, `TypeScript`) with `--sample-per-project 200`; use `--full` before claiming parser completion.
 8. **No context pollution.** Print one-line summaries. Log details to files.
 9. **Update coordination files** (`TASKS.md`, `PROGRESS.md`) before pushing.
    If you discover new required work, add it as a new unchecked task in `TASKS.md` (with priority/dependency note).

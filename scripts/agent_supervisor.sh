@@ -411,7 +411,10 @@ spawn_codex_bg() {
   prompt+="Implement the task, run ./tests/run_tests.sh --fast, commit your changes, and exit."$'\n'
   if [[ "${task_text}" =~ [Pp]arser|[Pp]arse|[Ll]exer|[Aa][Ss][Tt] ]]; then
     prompt+="This task touches parsing/lexing/AST. Run parser fail-fast gates before commit:"$'\n'
-    prompt+="1) quick sampled benchmark-first gate: ./scripts/parse_flagship_failfast.sh --sample 0.02"$'\n'
+    prompt+="1) quick project-by-project smoke gate (heaviest last):"$'\n'
+    prompt+="   ./scripts/parse_flagship_failfast.sh --project prettier --sample-per-project 200"$'\n'
+    prompt+="   ./scripts/parse_flagship_failfast.sh --project babel --sample-per-project 200"$'\n'
+    prompt+="   ./scripts/parse_flagship_failfast.sh --project TypeScript --sample-per-project 200"$'\n'
     prompt+="2) when near-done or fixing parser regressions: ./scripts/parse_flagship_failfast.sh --full"$'\n'
     prompt+="If parser gate fails, fix or add a TODO task describing the blocker before exit."$'\n'
   fi
