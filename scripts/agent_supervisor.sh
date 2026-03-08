@@ -260,6 +260,19 @@ set_lock_status() {
   fi
 }
 
+append_lock_note() {
+  local task_id="$1"
+  local key="$2"
+  local value="$3"
+  local lock_path="${LOCK_DIR}/${task_id}"
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -f "${lock_path}/meta.txt" ]]; then
+    echo "${key}=${value}" >> "${lock_path}/meta.txt"
+  fi
+}
+
 merge_pending_branch_at_start() {
   local task_id="$1"
   local branch="$2"
@@ -300,7 +313,7 @@ merge_pending_branch_at_start() {
 resolve_pending_merges_at_start() {
   local pending_count=0
   local merged_count=0
-  local unresolved_count=0
+  local reopened_count=0
 
   shopt -s nullglob
   local lock_path
@@ -314,8 +327,10 @@ resolve_pending_merges_at_start() {
     pending_count=$((pending_count + 1))
     branch="$(read_lock_meta_value "${lock_dir}" "branch")"
     if [[ -z "${branch}" ]]; then
-      echo "STARTUP_MERGE_WARN: ${task_id} has pending_merge but no branch metadata; leaving pending"
-      unresolved_count=$((unresolved_count + 1))
+      echo "STARTUP_MERGE_WARN: ${task_id} has pending_merge but no branch metadata; reopening task"
+      set_lock_status "${task_id}" "reopened"
+      append_lock_note "${task_id}" "reopen_reason" "pending_merge_missing_branch_metadata"
+      reopened_count=$((reopened_count + 1))
       continue
     fi
 
@@ -323,14 +338,42 @@ resolve_pending_merges_at_start() {
       set_lock_status "${task_id}" "done"
       merged_count=$((merged_count + 1))
     else
-      unresolved_count=$((unresolved_count + 1))
+      set_lock_status "${task_id}" "reopened"
+      append_lock_note "${task_id}" "reopen_reason" "pending_merge_unresolved_at_startup"
+      reopened_count=$((reopened_count + 1))
     fi
   done
   shopt -u nullglob
 
   if [[ "${pending_count}" -gt 0 ]]; then
-    echo "STARTUP_MERGE_SUMMARY: pending=${pending_count} merged=${merged_count} unresolved=${unresolved_count}"
+    echo "STARTUP_MERGE_SUMMARY: pending=${pending_count} merged=${merged_count} reopened=${reopened_count}"
   fi
+}
+
+cleanup_orphan_agent_worktrees() {
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    echo "[dry-run] cleanup orphaned agent worktree directories under ${WORKTREE_DIR}"
+    return 0
+  fi
+  if [[ ! -d "${WORKTREE_DIR}" ]]; then
+    return 0
+  fi
+
+  local active_file
+  active_file="$(mktemp)"
+  git -C "${ROOT_DIR}" worktree list --porcelain | sed -n 's/^worktree //p' > "${active_file}" || true
+
+  shopt -s nullglob
+  local wt
+  for wt in "${WORKTREE_DIR}"/agent_*; do
+    [[ -d "${wt}" ]] || continue
+    if ! grep -Fxq "${wt}" "${active_file}"; then
+      rm -rf "${wt}"
+      echo "CLEANUP: removed orphan worktree dir ${wt}"
+    fi
+  done
+  shopt -u nullglob
+  rm -f "${active_file}"
 }
 
 mark_task_done_in_tasks() {
@@ -937,6 +980,7 @@ setup() {
 
   resolve_base_ref
   resolve_pending_merges_at_start
+  cleanup_orphan_agent_worktrees
   commit_supervisor_task_updates "supervisor: reconcile pending merges at startup" || true
 }
 
@@ -1060,8 +1104,13 @@ push_and_cleanup() {
           LAST_INTEGRATED=1
           echo "INFO: codex resolved merge for ${branch}" >>"${log}"
         else
-          echo "WARN: codex could not resolve merge for ${branch}; keeping branch/worktree for manual resolve" >>"${log}"
-          echo "WARN: merge unresolved for ${branch}; retained ${wt}"
+          echo "WARN: codex could not resolve merge for ${branch}; keeping branch but dropping worktree" >>"${log}"
+          if [[ "${KEEP_LOCAL}" -eq 0 && "${CLEANUP_LOCAL}" -eq 1 ]]; then
+            git -C "${ROOT_DIR}" worktree remove "${wt}" --force >/dev/null 2>&1 || true
+            rm -rf "${wt}" >/dev/null 2>&1 || true
+            echo "INFO: removed unresolved worktree ${wt}; branch retained: ${branch}" >>"${log}"
+          fi
+          echo "WARN: merge unresolved for ${branch}; branch retained for manual follow-up"
           return 0
         fi
       fi
@@ -1488,9 +1537,12 @@ spawn_round() {
       fi
     elif [[ "${st}" -eq 0 && "${ahead}" -gt 0 ]]; then
       TOTAL_FAIL=$((TOTAL_FAIL + 1))
-      SUMMARY_FAIL+=("${task_text} (pending merge)")
-      mark_task_pending_merge "${task_id}" "${branch}" "${wt}" "${log}"
-      echo "WARN: task has commits but is not integrated into main; left as pending_merge: ${task_id}" >>"${log}"
+      SUMMARY_FAIL+=("${task_text} (unmerged; reopened)")
+      set_lock_status "${task_id}" "reopened"
+      append_lock_note "${task_id}" "reopen_reason" "agent_commits_not_integrated"
+      append_lock_note "${task_id}" "branch" "${branch}"
+      append_lock_note "${task_id}" "agent_log" "${log}"
+      echo "WARN: task has commits but is not integrated into main; reopened task: ${task_id}" >>"${log}"
     else
       TOTAL_FAIL=$((TOTAL_FAIL + 1))
       if [[ "${st}" -eq 86 ]]; then
