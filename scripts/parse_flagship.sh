@@ -19,6 +19,7 @@ PROJECT_FILTER=""
 MAX_PER_PROJECT="0"
 SCAN_CAP="0"
 INTEGRATION_ONLY="0"
+MIN_PASS_RATE="0.95"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,6 +30,7 @@ while [[ $# -gt 0 ]]; do
     --max-per-project) MAX_PER_PROJECT="$2"; shift 2 ;;
     --scan-cap) SCAN_CAP="$2"; shift 2 ;;
     --integration-only) INTEGRATION_ONLY="1"; shift ;;
+    --min-pass-rate) MIN_PASS_RATE="$2"; shift 2 ;;
     *)
       echo "Unknown arg: $1" >&2
       exit 1
@@ -42,6 +44,27 @@ fi
 
 if [ ! -d "$FLAGSHIP_DIR" ]; then
   echo "ERROR: flagship directory missing: $FLAGSHIP_DIR"
+  exit 1
+fi
+
+COMMON_GIT_DIR="$(git -C "$ROOT_DIR" rev-parse --git-common-dir 2>/dev/null || true)"
+ALT_ROOT=""
+if [ -n "$COMMON_GIT_DIR" ]; then
+  ALT_ROOT="$(cd "${COMMON_GIT_DIR}/.." && pwd)"
+fi
+
+VERIFIEDJS_BIN="${ROOT_DIR}/.lake/build/bin/verifiedjs"
+if [ ! -x "$VERIFIEDJS_BIN" ] && [ -n "$ALT_ROOT" ] && [ -x "$ALT_ROOT/.lake/build/bin/verifiedjs" ]; then
+  VERIFIEDJS_BIN="$ALT_ROOT/.lake/build/bin/verifiedjs"
+fi
+if [ ! -x "$VERIFIEDJS_BIN" ]; then
+  lake -d "$ROOT_DIR" build verifiedjs >/dev/null 2>&1 || lake -d "$ROOT_DIR" build >/dev/null 2>&1 || true
+fi
+if [ ! -x "$VERIFIEDJS_BIN" ] && [ -n "$ALT_ROOT" ] && [ -x "$ALT_ROOT/.lake/build/bin/verifiedjs" ]; then
+  VERIFIEDJS_BIN="$ALT_ROOT/.lake/build/bin/verifiedjs"
+fi
+if [ ! -x "$VERIFIEDJS_BIN" ]; then
+  echo "ERROR: verifiedjs executable missing after build: $VERIFIEDJS_BIN"
   exit 1
 fi
 
@@ -75,6 +98,26 @@ for project in "${projects[@]}"; do
     exit 1
   fi
 
+  project_base="$project_dir"
+  if ! find "$project_base" -type f \( -name "*.js" -o -name "*.mjs" -o -name "*.cjs" \) -print -quit | grep -q .; then
+    alt_project_dir="${ALT_ROOT}/tests/flagship/${project}"
+    if [ -n "$ALT_ROOT" ] && [ -d "$alt_project_dir" ] && \
+       find "$alt_project_dir" -type f \( -name "*.js" -o -name "*.mjs" -o -name "*.cjs" \) -print -quit | grep -q .; then
+      project_base="$alt_project_dir"
+    fi
+  fi
+
+  project_roots=("$project_base")
+  if [ "$INTEGRATION_ONLY" = "1" ]; then
+    if [ -d "$project_base/tests/integration" ]; then
+      project_roots=("$project_base/tests/integration")
+    elif [ -d "$project_base/test" ]; then
+      project_roots=("$project_base/test")
+    elif [ -d "$project_base/tests" ]; then
+      project_roots=("$project_base/tests")
+    fi
+  fi
+
   PROJECT_SELECTED=0
   PROJECT_PASS=0
   PROJECT_FAIL=0
@@ -97,7 +140,7 @@ for project in "${projects[@]}"; do
     fi
 
     PROJECT_SELECTED=$((PROJECT_SELECTED + 1))
-    if lake exe verifiedjs "$file" --parse-only >/dev/null 2>&1; then
+    if "$VERIFIEDJS_BIN" "$file" --parse-only >/dev/null 2>&1; then
       PROJECT_PASS=$((PROJECT_PASS + 1))
       echo "PARSE_PASS $file"
     else
@@ -107,7 +150,7 @@ for project in "${projects[@]}"; do
   done < <(
     find "${project_roots[@]}" \
       -type d \( -name .git -o -name node_modules -o -name dist -o -name build -o -name built -o -name coverage -o -name .yarn \) -prune -o \
-      -type f \( -name "*.js" -o -name "*.mjs" -o -name "*.cjs" \) -print
+      -type f \( -name "*.js" -o -name "*.mjs" -o -name "*.cjs" \) -print \
   | LC_ALL=C sort)
 
   TOTAL_SELECTED=$((TOTAL_SELECTED + PROJECT_SELECTED))
@@ -115,21 +158,29 @@ for project in "${projects[@]}"; do
   TOTAL_FAIL=$((TOTAL_FAIL + PROJECT_FAIL))
   TOTAL_SKIP=$((TOTAL_SKIP + PROJECT_SKIP))
 
-  echo "ParseFlagship[$project]: pass=$PROJECT_PASS fail=$PROJECT_FAIL selected=$PROJECT_SELECTED skipped=$PROJECT_SKIP"
+  if [ "$PROJECT_SELECTED" -gt 0 ]; then
+    PROJECT_RATE=$(awk -v p="$PROJECT_PASS" -v s="$PROJECT_SELECTED" 'BEGIN { printf("%.2f", (100.0 * p) / s) }')
+  else
+    PROJECT_RATE="0.00"
+  fi
+  echo "ParseFlagship[$project]: pass=$PROJECT_PASS fail=$PROJECT_FAIL selected=$PROJECT_SELECTED skipped=$PROJECT_SKIP rate=${PROJECT_RATE}%"
 done
 
-echo "ParseFlagship: pass=$TOTAL_PASS fail=$TOTAL_FAIL selected=$TOTAL_SELECTED skipped=$TOTAL_SKIP sample=$SAMPLE_RATE integrationOnly=$INTEGRATION_ONLY"
+if [ "$TOTAL_SELECTED" -gt 0 ]; then
+  TOTAL_RATE=$(awk -v p="$TOTAL_PASS" -v s="$TOTAL_SELECTED" 'BEGIN { printf("%.2f", (100.0 * p) / s) }')
+else
+  TOTAL_RATE="0.00"
+fi
+echo "ParseFlagship: pass=$TOTAL_PASS fail=$TOTAL_FAIL selected=$TOTAL_SELECTED skipped=$TOTAL_SKIP rate=${TOTAL_RATE}% sample=$SAMPLE_RATE integrationOnly=$INTEGRATION_ONLY"
 
-if [ "$TOTAL_FAIL" -gt 0 ]; then
+if [ "$TOTAL_SELECTED" -eq 0 ]; then
+  echo "ERROR: no files selected for parse sweep"
   exit 1
 fi
-  project_roots=("$project_dir")
-  if [ "$INTEGRATION_ONLY" = "1" ]; then
-    if [ -d "$project_dir/tests/integration" ]; then
-      project_roots=("$project_dir/tests/integration")
-    elif [ -d "$project_dir/test" ]; then
-      project_roots=("$project_dir/test")
-    elif [ -d "$project_dir/tests" ]; then
-      project_roots=("$project_dir/tests")
-    fi
-  fi
+
+if awk -v p="$TOTAL_PASS" -v s="$TOTAL_SELECTED" -v min="$MIN_PASS_RATE" 'BEGIN { exit !((p / s) >= min) }'; then
+  exit 0
+fi
+
+echo "ERROR: parse pass rate below threshold (min=${MIN_PASS_RATE}, actual=${TOTAL_RATE}%)"
+exit 1
