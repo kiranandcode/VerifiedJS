@@ -194,6 +194,9 @@ partial def tokenizeChars
     (parenDepth : Nat)
     (controlHeaderParens : List Nat)
     (pendingControlHeader : Bool)
+    (braceDepth : Nat)
+    (controlBlockBraces : List Nat)
+    (pendingControlBlock : Bool)
     (acc : List Token) : Except String (List Token) := do
   match chars with
   | [] =>
@@ -204,16 +207,16 @@ partial def tokenizeChars
       | '!' :: tail =>
         let (rest, consumedComment) := skipLineComment tail
         let consumed := consumedComment + 2
-        tokenizeChars rest line (col + consumed) (offset + consumed) expectRegex parenDepth controlHeaderParens pendingControlHeader acc
+        tokenizeChars rest line (col + consumed) (offset + consumed) expectRegex parenDepth controlHeaderParens pendingControlHeader braceDepth controlBlockBraces pendingControlBlock acc
       | _ =>
         throw s!"Lexer error at {line}:{col}: unexpected character `#`"
     else if c = ' ' || c = '\t' || c = '\r' then
       let (_, nextCol, nextOffset) := advancePos line col offset c
-      tokenizeChars cs line nextCol nextOffset expectRegex parenDepth controlHeaderParens pendingControlHeader acc
+      tokenizeChars cs line nextCol nextOffset expectRegex parenDepth controlHeaderParens pendingControlHeader braceDepth controlBlockBraces pendingControlBlock acc
     else if c = '\n' then
       let tok : Token := { kind := .newline, pos := { line, col, offset } }
       let (nextLine, nextCol, nextOffset) := advancePos line col offset c
-      tokenizeChars cs nextLine nextCol nextOffset true parenDepth controlHeaderParens pendingControlHeader (tok :: acc)
+      tokenizeChars cs nextLine nextCol nextOffset expectRegex parenDepth controlHeaderParens pendingControlHeader braceDepth controlBlockBraces pendingControlBlock (tok :: acc)
     else if isIdentStart c then
       let (idChars, rest) := readWhile (c :: cs) isIdentContinue
       let s := String.mk idChars
@@ -223,29 +226,29 @@ partial def tokenizeChars
         | .kw k => controlHeaderKeyword k
         | _ => false
       tokenizeChars rest line (col + idChars.length) (offset + idChars.length)
-        (not (tokenCanEndExpression kind)) parenDepth controlHeaderParens pendingControlHeader' (tok :: acc)
+        (not (tokenCanEndExpression kind)) parenDepth controlHeaderParens pendingControlHeader' braceDepth controlBlockBraces false (tok :: acc)
     else if c.isDigit then
       let (numChars, rest) := readWhile (c :: cs) (fun ch => ch.isDigit || ch = '.')
       let n := (String.toNat? (String.mk numChars)).getD 0
       let tok : Token := { kind := .number (Float.ofNat n), pos := { line, col, offset } }
-      tokenizeChars rest line (col + numChars.length) (offset + numChars.length) false parenDepth controlHeaderParens false (tok :: acc)
+      tokenizeChars rest line (col + numChars.length) (offset + numChars.length) false parenDepth controlHeaderParens false braceDepth controlBlockBraces false (tok :: acc)
     else if c = '"' || c = '\'' then
       let (body, rest, consumedTail) := readStringBody c cs
       let tok : Token := { kind := .string body, pos := { line, col, offset } }
       let consumed := consumedTail + 1
-      tokenizeChars rest line (col + consumed) (offset + consumed) false parenDepth controlHeaderParens false (tok :: acc)
+      tokenizeChars rest line (col + consumed) (offset + consumed) false parenDepth controlHeaderParens false braceDepth controlBlockBraces false (tok :: acc)
     else if c = '/' then
       match cs with
       | '/' :: tail =>
         let (rest, consumedComment) := skipLineComment tail
         let consumed := consumedComment + 2
-        tokenizeChars rest line (col + consumed) (offset + consumed) expectRegex parenDepth controlHeaderParens pendingControlHeader acc
+        tokenizeChars rest line (col + consumed) (offset + consumed) expectRegex parenDepth controlHeaderParens pendingControlHeader braceDepth controlBlockBraces pendingControlBlock acc
       | '*' :: tail =>
         let (rest, line', col', offset', _) ← skipBlockComment tail line (col + 2) (offset + 2) 2
-        tokenizeChars rest line' col' offset' expectRegex parenDepth controlHeaderParens pendingControlHeader acc
+        tokenizeChars rest line' col' offset' expectRegex parenDepth controlHeaderParens pendingControlHeader braceDepth controlBlockBraces pendingControlBlock acc
       | '=' :: tail =>
         let tok : Token := { kind := .punct "/=", pos := { line, col, offset } }
-        tokenizeChars tail line (col + 2) (offset + 2) true parenDepth controlHeaderParens false (tok :: acc)
+        tokenizeChars tail line (col + 2) (offset + 2) true parenDepth controlHeaderParens false braceDepth controlBlockBraces false (tok :: acc)
       | _ =>
         if expectRegex then
         let (pat, flags, rest, consumedTail, terminated) := readRegexBody cs
@@ -253,10 +256,10 @@ partial def tokenizeChars
           throw s!"Lexer error at {line}:{col}: unterminated regex literal"
         let tok : Token := { kind := .regex pat flags, pos := { line, col, offset } }
         let consumed := consumedTail + 1
-        tokenizeChars rest line (col + consumed) (offset + consumed) false parenDepth controlHeaderParens false (tok :: acc)
+        tokenizeChars rest line (col + consumed) (offset + consumed) false parenDepth controlHeaderParens false braceDepth controlBlockBraces false (tok :: acc)
         else
           let tok : Token := { kind := .punct "/", pos := { line, col, offset } }
-          tokenizeChars cs line (col + 1) (offset + 1) true parenDepth controlHeaderParens false (tok :: acc)
+          tokenizeChars cs line (col + 1) (offset + 1) true parenDepth controlHeaderParens false braceDepth controlBlockBraces false (tok :: acc)
     else
       let (p, rest) := readPunct (c :: cs)
       if p.isEmpty then
@@ -264,12 +267,12 @@ partial def tokenizeChars
       else
         let kind : TokenKind := .punct p
         let tok : Token := { kind, pos := { line, col, offset } }
-        let (parenDepth', controlHeaderParens', expectRegex') :=
+        let (parenDepth', controlHeaderParens', expectRegex', braceDepth', controlBlockBraces', pendingControlBlock') :=
           if p = "(" then
             let depth' := parenDepth + 1
             let controlHeaderParens' :=
               if pendingControlHeader then depth' :: controlHeaderParens else controlHeaderParens
-            (depth', controlHeaderParens', true)
+            (depth', controlHeaderParens', true, braceDepth, controlBlockBraces, false)
           else if p = ")" then
             let closingDepth := parenDepth
             let depth' := parenDepth - 1
@@ -278,14 +281,28 @@ partial def tokenizeChars
               | hd :: tl =>
                 if hd = closingDepth then (tl, true) else (controlHeaderParens, false)
               | [] => ([], false)
-            (depth', controlHeaderParens'', isControlClose || not (tokenCanEndExpression kind))
+            (depth', controlHeaderParens'', isControlClose || not (tokenCanEndExpression kind), braceDepth, controlBlockBraces, isControlClose)
+          else if p = "{" then
+            let depth' := braceDepth + 1
+            let controlBlockBraces' :=
+              if pendingControlBlock then depth' :: controlBlockBraces else controlBlockBraces
+            (parenDepth, controlHeaderParens, true, depth', controlBlockBraces', false)
+          else if p = "}" then
+            let closingDepth := braceDepth
+            let depth' := braceDepth - 1
+            let (controlBlockBraces'', closedControlBlock) :=
+              match controlBlockBraces with
+              | hd :: tl =>
+                if hd = closingDepth then (tl, true) else (controlBlockBraces, false)
+              | [] => ([], false)
+            (parenDepth, controlHeaderParens, closedControlBlock || not (tokenCanEndExpression kind), depth', controlBlockBraces'', false)
           else
-            (parenDepth, controlHeaderParens, not (tokenCanEndExpression kind))
+            (parenDepth, controlHeaderParens, not (tokenCanEndExpression kind), braceDepth, controlBlockBraces, false)
         tokenizeChars rest line (col + p.length) (offset + p.length)
-          expectRegex' parenDepth' controlHeaderParens' false (tok :: acc)
+          expectRegex' parenDepth' controlHeaderParens' false braceDepth' controlBlockBraces' pendingControlBlock' (tok :: acc)
 
 /-- Tokenize the full source string -/
 def tokenize (source : String) : Except String (List Token) :=
-  tokenizeChars source.toList 1 1 0 true 0 [] false []
+  tokenizeChars source.toList 1 1 0 true 0 [] false 0 [] false []
 
 end VerifiedJS.Source
