@@ -9,7 +9,7 @@
 | Core | defined | defined | implemented (small-step driver over `Core.Semantics.step?`) | stub | Elaborate: stub | stub |
 | Flat | defined | defined (`step?` explicit coverage for all `Flat.Expr` constructors) | stub | stub | ClosureConvert: stub | stub |
 | ANF | partial | defined (`step?`, `Step`, `Steps`, `initialState`, `Behaves`) | stub | stub | Convert: implemented (full Flat.Expr coverage), Optimize: done (identity) | OptimizeCorrect: done |
-| Wasm.IR | stub | N/A | stub | stub | Lower: implemented (ANF.Expr/ComplexExpr coverage with runtime helper call lowering) | stub |
+| Wasm.IR | stub | N/A | implemented (symbolic stack-machine reference interpreter with structured control flow, calls, globals/locals, memory map, and fuel bounds) | stub | Lower: implemented (ANF.Expr/ComplexExpr coverage with runtime helper call lowering) | stub |
 | Wasm.AST | defined | defined (`step?`, `Step`, `Steps`, `initialStore`, `initialState`, `Behaves`; core control/stack/local/global/numeric subset + branch/call_indirect/memory.size/memory.grow/bulk-op stubs wired, no `not yet implemented` fallbacks) | stub | stub | Emit: stub, Binary: stub | stub |
 
 ## Runtime Status

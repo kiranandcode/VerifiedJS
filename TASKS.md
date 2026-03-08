@@ -20,7 +20,7 @@
 - [ ] Implement Wasm.Binary (Wasm.AST → .wasm)
 - [ ] Write Flat.Interp reference interpreter
 - [ ] Write ANF.Interp reference interpreter
-- [ ] Write Wasm.IR.Interp reference interpreter
+- [x] Write Wasm.IR.Interp reference interpreter
 - [ ] Write Core.Print pretty-printer
 - [ ] Write Flat.Print pretty-printer
 - [ ] Write ANF.Print pretty-printer
