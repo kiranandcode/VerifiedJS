@@ -9,7 +9,7 @@
 | Core | defined | defined | stub | stub | Elaborate: stub | stub |
 | Flat | defined | stub | stub | stub | ClosureConvert: stub | stub |
 | ANF | partial | stub | stub | stub | Convert: implemented (full Flat.Expr coverage), Optimize: done (identity) | OptimizeCorrect: done |
-| Wasm.IR | stub | N/A | stub | stub | Lower: stub | stub |
+| Wasm.IR | stub | N/A | stub | stub | Lower: implemented (ANF.Expr/ComplexExpr coverage with runtime helper call lowering) | stub |
 | Wasm.AST | defined | stub | stub | stub | Emit: stub, Binary: stub | stub |
 
 ## Runtime Status

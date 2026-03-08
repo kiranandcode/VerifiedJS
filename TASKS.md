@@ -14,7 +14,7 @@
 - [ ] Implement Flat.ClosureConvert (JS.Core → JS.Flat)
 - [ ] Make test suite check for flat closure conversion
 - [ ] Make test suite check for ANF conversion
-- [ ] Implement Wasm.Lower (JS.ANF → Wasm.IR)
+- [x] Implement Wasm.Lower (JS.ANF → Wasm.IR)
 - [ ] Make test suite check for WASM lowering
 - [ ] Implement Wasm.Emit (Wasm.IR → Wasm.AST)
 - [ ] Make test suite check for WASM emitting
