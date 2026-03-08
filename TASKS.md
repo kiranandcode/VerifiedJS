@@ -1,7 +1,7 @@
 # VerifiedJS — Task List
 
 ## Priority 1 (blocking — foundations)
-- [ ] Define JS.Core.Semantics small-step LTS
+- [x] Define JS.Core.Semantics small-step LTS
 - [ ] Define JS.Flat.Syntax inductive types
 - [ ] Define JS.ANF.Syntax inductive types
 - [ ] Define Wasm.Syntax (port from WasmCert-Coq)
