@@ -6,12 +6,24 @@
 
 namespace VerifiedJS.Core
 
-/-- Core unary operators (after desugaring) -/
+/-- ECMA-262 §6.1 language values in Core. -/
+abbrev VarName := String
+
+/-- ECMA-262 §6.1.7 property keys (string-normalized in Core). -/
+abbrev PropName := String
+
+/-- ECMA-262 §13.13 Labels (used by break/continue). -/
+abbrev LabelName := String
+
+/-- ECMA-262 §10.2 function identity (global function table index in Core). -/
+abbrev FuncIdx := Nat
+
+/-- ECMA-262 §13.5, §13.4, §13.5 Runtime Semantics: unary operators. -/
 inductive UnaryOp where
   | neg | pos | bitNot | logNot | void
   deriving Repr, BEq
 
-/-- Core binary operators (after desugaring) -/
+/-- ECMA-262 §13.8-§13.11, §13.15 Runtime Semantics: binary operators. -/
 inductive BinOp where
   | add | sub | mul | div | mod | exp
   | eq | neq | strictEq | strictNeq
@@ -21,7 +33,7 @@ inductive BinOp where
   | instanceof | «in»
   deriving Repr, BEq
 
-/-- Core values — subset of JS values after desugaring -/
+/-- ECMA-262 §6.1 language values after Core desugaring. -/
 inductive Value where
   | null
   | undefined
@@ -29,47 +41,59 @@ inductive Value where
   | number (n : Float)
   | string (s : String)
   | object (addr : Nat) -- heap address
-  | function (idx : Nat) -- function table index
+  | function (idx : FuncIdx) -- function table index
   deriving Repr, BEq
 
-/-- Core expressions — all desugared to primitives -/
+/--
+ECMA-262 §13 Runtime Semantics: Evaluation (desugared Core expression language).
+Control forms and effects are expression-based to simplify small-step semantics.
+-/
 inductive Expr where
   | lit (v : Value)
-  | var (name : String)
-  | «let» (name : String) (init : Expr) (body : Expr)
-  | assign (name : String) (value : Expr)
+  | var (name : VarName)
+  | «let» (name : VarName) (init : Expr) (body : Expr)
+  | assign (name : VarName) (value : Expr)
   | «if» (cond : Expr) (then_ : Expr) (else_ : Expr)
   | seq (a b : Expr)
   | call (callee : Expr) (args : List Expr)
   | newObj (callee : Expr) (args : List Expr)
-  | getProp (obj : Expr) (prop : String)
-  | setProp (obj : Expr) (prop : String) (value : Expr)
+  | getProp (obj : Expr) (prop : PropName)
+  | setProp (obj : Expr) (prop : PropName) (value : Expr)
   | getIndex (obj : Expr) (idx : Expr)
   | setIndex (obj : Expr) (idx : Expr) (value : Expr)
-  | deleteProp (obj : Expr) (prop : String)
+  | deleteProp (obj : Expr) (prop : PropName)
   | typeof (arg : Expr)
   | unary (op : UnaryOp) (arg : Expr)
   | binary (op : BinOp) (lhs rhs : Expr)
-  | objectLit (props : List (String × Expr))
+  | objectLit (props : List (PropName × Expr))
   | arrayLit (elems : List Expr)
-  | functionDef (name : Option String) (params : List String) (body : Expr)
+  | functionDef (name : Option VarName) (params : List VarName) (body : Expr)
     (isAsync : Bool) (isGenerator : Bool)
   | throw (arg : Expr)
-  | tryCatch (body : Expr) (catchParam : String) (catchBody : Expr) (finally_ : Option Expr)
+  | tryCatch (body : Expr) (catchParam : VarName) (catchBody : Expr) (finally_ : Option Expr)
   | while_ (cond : Expr) (body : Expr)
-  | «break» (label : Option String)
-  | «continue» (label : Option String)
+  | «break» (label : Option LabelName)
+  | «continue» (label : Option LabelName)
   | «return» (arg : Option Expr)
-  | labeled (label : String) (body : Expr)
+  | labeled (label : LabelName) (body : Expr)
   | yield (arg : Option Expr) (delegate : Bool)
   | await (arg : Expr)
   | this
-  deriving Repr
+  deriving Repr, BEq
 
-/-- A Core program is a list of top-level expressions -/
+/-- ECMA-262 §10.2 function metadata captured in Core programs. -/
+structure FuncDef where
+  name : VarName
+  params : List VarName
+  body : Expr
+  isAsync : Bool := false
+  isGenerator : Bool := false
+  deriving Repr, BEq
+
+/-- ECMA-262 §16 Scripts and Modules (script body lowered to one Core expression). -/
 structure Program where
   body : Expr
-  functions : Array (String × List String × Expr)
-  deriving Repr
+  functions : Array FuncDef
+  deriving Repr, BEq
 
 end VerifiedJS.Core
