@@ -64,7 +64,7 @@ private def isIdentContinue (c : Char) : Bool :=
 private def keywordSet : List String :=
   [ "break", "case", "catch", "class", "const", "continue", "debugger", "default"
   , "delete", "do", "else", "export", "extends", "finally", "for", "function", "if"
-  , "import", "in", "instanceof", "let", "new", "return", "switch", "this", "throw"
+  , "import", "in", "instanceof", "let", "new", "of", "return", "switch", "this", "throw"
   , "try", "typeof", "var", "void", "while", "with", "yield", "await", "true", "false"
   , "null", "undefined"
   ]
@@ -134,6 +134,22 @@ private def readStringBody (quote : Char) (chars : List Char) :
         go cs (c :: acc) (consumed + 1)
   go chars [] 0
 
+private def readTemplateBody (chars : List Char) :
+    String × List Char × Nat × Bool :=
+  let rec go (rest acc : List Char) (consumed : Nat) (escaped : Bool) :=
+    match rest with
+    | [] => (String.mk acc.reverse, [], consumed, false)
+    | c :: cs =>
+      if escaped then
+        go cs (c :: acc) (consumed + 1) false
+      else if c = '\\' then
+        go cs (c :: acc) (consumed + 1) true
+      else if c = '`' then
+        (String.mk acc.reverse, cs, consumed + 1, true)
+      else
+        go cs (c :: acc) (consumed + 1) false
+  go chars [] 0 false
+
 private def readRegexBody (chars : List Char) : String × String × List Char × Nat × Bool :=
   let rec body (rest acc : List Char) (consumed : Nat) (inClass escaped : Bool) :=
     match rest with
@@ -163,7 +179,7 @@ private def punct2Set : List String :=
   , "?."
   ]
 
-private def punct3Set : List String := ["===", "!==", "<<=", ">>=", "**=", ">>>", ">>>="]
+private def punct3Set : List String := ["===", "!==", "<<=", ">>=", "**=", ">>>", ">>>=", "...", "??="]
 
 private def readPunct (chars : List Char) : String × List Char :=
   match chars with
@@ -232,6 +248,13 @@ partial def tokenizeChars
     else if c = '"' || c = '\'' then
       let (body, rest, consumedTail) := readStringBody c cs
       let tok : Token := { kind := .string body, pos := { line, col, offset } }
+      let consumed := consumedTail + 1
+      tokenizeChars rest line (col + consumed) (offset + consumed) false parenDepth controlHeaderParens false (tok :: acc)
+    else if c = '`' then
+      let (body, rest, consumedTail, terminated) := readTemplateBody cs
+      if !terminated then
+        throw s!"Lexer error at {line}:{col}: unterminated template literal"
+      let tok : Token := { kind := .template [body], pos := { line, col, offset } }
       let consumed := consumedTail + 1
       tokenizeChars rest line (col + consumed) (offset + consumed) false parenDepth controlHeaderParens false (tok :: acc)
     else if c = '/' then

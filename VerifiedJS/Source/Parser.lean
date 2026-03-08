@@ -62,6 +62,14 @@ private partial def skipSeparators : ParserM Unit := do
   else
     pure ()
 
+private partial def skipNewlines : ParserM Unit := do
+  let t <- peek
+  match t.kind with
+  | .newline =>
+    let _ <- bump
+    skipNewlines
+  | _ => pure ()
+
 private def tokenDesc (t : Token) : String :=
   match t.kind with
   | .number _ => "number"
@@ -161,10 +169,12 @@ private partial def parseImportDeclStmt : ParserM Stmt := do
 
   let parseNamedSpecifiers : ParserM (List ImportSpecifier) := do
     expectPunct "{"
+    skipNewlines
     if (← consumePunct? "}") then
       pure []
     else
       let rec loop (acc : List ImportSpecifier) : ParserM (List ImportSpecifier) := do
+        skipNewlines
         let imported <- parseIdentLike
         let localName <-
           if (← consumeWord? "as") then
@@ -173,6 +183,7 @@ private partial def parseImportDeclStmt : ParserM Stmt := do
             pure imported
         let spec := ImportSpecifier.named imported localName
         if (← consumePunct? ",") then
+          skipNewlines
           if (← consumePunct? "}") then
             pure (List.reverse (spec :: acc))
           else
@@ -231,6 +242,43 @@ private def asAssignTarget (e : Expr) : Option AssignTarget :=
 private def parsePatternFromIdent (name : String) : Pattern :=
   .ident name none
 
+private partial def skipBalancedPunct (openP closeP : String) (depth : Nat := 1) : ParserM Unit := do
+  if depth = 0 then
+    pure ()
+  else
+    let t <- bump
+    match t.kind with
+    | .eof => throw s!"Unterminated balanced token `{openP}`"
+    | .punct p =>
+      if p = openP then
+        skipBalancedPunct openP closeP (depth + 1)
+      else if p = closeP then
+        skipBalancedPunct openP closeP (depth - 1)
+      else
+        skipBalancedPunct openP closeP depth
+    | _ => skipBalancedPunct openP closeP depth
+
+private partial def parseBindingPatternM : ParserM Pattern := do
+  skipNewlines
+  let _ <- consumePunct? "..."
+  let t <- peek
+  match t.kind with
+  | .ident name =>
+    let _ <- bump
+    pure (.ident name none)
+  | .kw name =>
+    let _ <- bump
+    pure (.ident name none)
+  | .punct "{" =>
+    let _ <- bump
+    skipBalancedPunct "{" "}"
+    pure (.ident "__objPattern" none)
+  | .punct "[" =>
+    let _ <- bump
+    skipBalancedPunct "[" "]"
+    pure (.ident "__arrPattern" none)
+  | _ => failExpected "binding pattern"
+
 private def parsePatternFromExpr (e : Expr) : Option Pattern :=
   match e with
   | .ident n => some (.ident n none)
@@ -269,38 +317,65 @@ private partial def skipBalancedBlock : Nat → ParserM Unit := fun depth => do
 mutual
 
 private partial def parseExprListUntil (close : String) : ParserM (List Expr) := do
+  skipNewlines
   let closeNow <- consumePunct? close
   if closeNow then
     pure []
   else
-    let first <- parseAssignmentM
+    let first <-
+      if (← consumePunct? "...") then
+        pure (.spread (← parseAssignmentM))
+      else
+        parseAssignmentM
     let rec go (acc : List Expr) : ParserM (List Expr) := do
+      skipNewlines
       let comma <- consumePunct? ","
       if comma then
+        skipNewlines
         if (← consumePunct? close) then
           pure acc.reverse
         else
-          let e <- parseAssignmentM
+          let e <-
+            if (← consumePunct? "...") then
+              pure (.spread (← parseAssignmentM))
+            else
+              parseAssignmentM
           go (e :: acc)
       else
         expectPunct close
         pure acc.reverse
     go [first]
 
-private partial def parseParamList : ParserM (List Pattern) := do
-  expectPunct "("
+private partial def parseParamPatternM : ParserM Pattern := do
+  let base <- parseBindingPatternM
+  if (← consumePunct? "=") then
+    pure (.assign base (← parseAssignmentM))
+  else
+    pure base
+
+private partial def parseParamListAfterOpen : ParserM (List Pattern) := do
+  skipNewlines
   if (← consumePunct? ")") then
     pure []
   else
-    let first <- parsePatternFromIdent <$> parseIdentLike
+    let first <- parseParamPatternM
     let rec go (acc : List Pattern) : ParserM (List Pattern) := do
+      skipNewlines
       if (← consumePunct? ",") then
-        let p <- parsePatternFromIdent <$> parseIdentLike
-        go (p :: acc)
+        skipNewlines
+        if (← consumePunct? ")") then
+          pure acc.reverse
+        else
+          let p <- parseParamPatternM
+          go (p :: acc)
       else
         expectPunct ")"
         pure acc.reverse
     go [first]
+
+private partial def parseParamList : ParserM (List Pattern) := do
+  expectPunct "("
+  parseParamListAfterOpen
 
 private partial def parseFunctionBody : ParserM (List Stmt) := do
   expectPunct "{"
@@ -308,6 +383,8 @@ private partial def parseFunctionBody : ParserM (List Stmt) := do
   pure []
 
 private partial def parsePropertyKey : ParserM PropertyKey := do
+  if (← consumePunct? "#") then
+    return .private_ (← parseIdentLike)
   let t <- peek
   match t.kind with
   | .ident n =>
@@ -444,6 +521,7 @@ private partial def parseClassExpr : ParserM Expr := do
   pure (.class name superClass body)
 
 private partial def parsePrimaryM : ParserM Expr := do
+  skipNewlines
   let t <- peek
   match t.kind with
   | .number n =>
@@ -469,7 +547,14 @@ private partial def parsePrimaryM : ParserM Expr := do
     let _ <- bump
     match parseKeywordLiteral k with
     | some e => pure e
-    | none => throw s!"Unsupported keyword expression `{k}` at {t.pos.line}:{t.pos.col}"
+    | none =>
+      if k = "import" then
+        pure (.ident "import")
+      else
+        throw s!"Unsupported keyword expression `{k}` at {t.pos.line}:{t.pos.col}"
+  | .template parts =>
+    let _ <- bump
+    pure (.template none (parts.map (fun s => .string s)))
   | .punct "(" =>
     let _ <- bump
     let e <- parseExprM
@@ -484,9 +569,14 @@ private partial def parsePrimaryM : ParserM Expr := do
 private partial def parsePostfixM : ParserM Expr := do
   let base <- parsePrimaryM
   let rec loop (e : Expr) : ParserM Expr := do
+    skipNewlines
     if (← consumePunct? ".") then
-      let prop <- parseIdentLike
-      loop (.member e prop)
+      if (← consumePunct? "#") then
+        let name <- parseIdentLike
+        loop (.privateMember e name)
+      else
+        let prop <- parseIdentLike
+        loop (.member e prop)
     else if (← consumePunct? "?.") then
       let t <- peek
       match t.kind with
@@ -511,7 +601,13 @@ private partial def parsePostfixM : ParserM Expr := do
       let args <- parseExprListUntil ")"
       loop (.call e args)
     else
-      pure e
+      let t <- peek
+      match t.kind with
+      | .template parts =>
+        let _ <- bump
+        loop (.template (some e) (parts.map (fun s => .string s)))
+      | _ =>
+        pure e
   let withPost <- loop base
   if (← consumePunct? "++") then
     pure (.unary .postInc withPost)
@@ -765,22 +861,7 @@ private partial def parseArrowFromParenParams? : ParserM (Option Expr) := do
     if !(← consumePunct? "(") then
       pure none
     else
-      let params <-
-        if (← consumePunct? ")") then
-          pure []
-        else
-          let first <- parsePatternFromIdent <$> parseIdentLike
-          let rec loop (acc : List Pattern) : ParserM (List Pattern) := do
-            if (← consumePunct? ",") then
-              if (← consumePunct? ")") then
-                pure acc.reverse
-              else
-                let p <- parsePatternFromIdent <$> parseIdentLike
-                loop (p :: acc)
-            else
-              expectPunct ")"
-              pure acc.reverse
-          loop [first]
+      let params <- parseParamListAfterOpen
       expectPunct "=>"
       let body <-
         if (← consumePunct? "{") then
@@ -795,6 +876,7 @@ private partial def parseArrowFromParenParams? : ParserM (Option Expr) := do
     pure none
 
 private partial def parseAssignmentM : ParserM Expr := do
+  skipNewlines
   match (← parseArrowFromParenParams?) with
   | some f => pure f
   | none =>
@@ -813,9 +895,12 @@ private partial def parseAssignmentM : ParserM Expr := do
           pure (.assign op target rhs)
 
 private partial def parseExprM : ParserM Expr := do
+  skipNewlines
   let first <- parseAssignmentM
   let rec loop (acc : List Expr) : ParserM Expr := do
+    skipNewlines
     if (← consumePunct? ",") then
+      skipNewlines
       let e <- parseAssignmentM
       loop (e :: acc)
     else
@@ -827,13 +912,13 @@ private partial def parseExprM : ParserM Expr := do
 end
 
 private partial def parseVarDecl : ParserM VarDeclarator := do
-  let name <- parseIdentLike
+  let pat <- parseBindingPatternM
   let init <-
     if (← consumePunct? "=") then
       some <$> parseAssignmentM
     else
       pure none
-  pure (.mk (parsePatternFromIdent name) init)
+  pure (.mk pat init)
 
 private partial def parseVarDecls : ParserM (List VarDeclarator) := do
   let first <- parseVarDecl
@@ -855,6 +940,7 @@ private def expectStringLit : ParserM String := do
 
 private partial def parseImportNamedSpecifiers : ParserM (List ImportSpecifier) := do
   expectPunct "{"
+  skipNewlines
   if (← consumePunct? "}") then
     pure []
   else
@@ -862,7 +948,9 @@ private partial def parseImportNamedSpecifiers : ParserM (List ImportSpecifier) 
     let localName <- if (← consumeWord? "as") then parseIdentLike else pure imported
     let first : ImportSpecifier := .named imported localName
     let rec loop (acc : List ImportSpecifier) : ParserM (List ImportSpecifier) := do
+      skipNewlines
       if (← consumePunct? ",") then
+        skipNewlines
         if (← consumePunct? "}") then
           pure acc.reverse
         else
@@ -952,6 +1040,7 @@ private partial def parseSwitchCases : ParserM (List SwitchCase) := do
 
 private partial def parseForStmt : ParserM Stmt := do
   expectKeyword "for"
+  let asyncForOf <- consumeKeyword? "await"
   expectPunct "("
   if (← consumePunct? ";") then
     let cond <- if (← consumePunct? ";") then pure none else (some <$> parseExprM <* expectPunct ";")
@@ -971,7 +1060,10 @@ private partial def parseForStmt : ParserM Stmt := do
       expectPunct ")"
       let lhs <- liftExcept (parseForLHSFromDecls .var decls)
       let body <- parseStmt
-      pure (.forOf (some .var) lhs rhs body)
+      if asyncForOf then
+        pure (.forOfEx (some .var) lhs rhs body .async)
+      else
+        pure (.forOf (some .var) lhs rhs body)
     else
       expectPunct ";"
       let cond <- if (← consumePunct? ";") then pure none else (some <$> parseExprM <* expectPunct ";")
@@ -991,7 +1083,10 @@ private partial def parseForStmt : ParserM Stmt := do
       expectPunct ")"
       let lhs <- liftExcept (parseForLHSFromDecls .let_ decls)
       let body <- parseStmt
-      pure (.forOf (some .let_) lhs rhs body)
+      if asyncForOf then
+        pure (.forOfEx (some .let_) lhs rhs body .async)
+      else
+        pure (.forOf (some .let_) lhs rhs body)
     else
       expectPunct ";"
       let cond <- if (← consumePunct? ";") then pure none else (some <$> parseExprM <* expectPunct ";")
@@ -1011,7 +1106,10 @@ private partial def parseForStmt : ParserM Stmt := do
       expectPunct ")"
       let lhs <- liftExcept (parseForLHSFromDecls .const_ decls)
       let body <- parseStmt
-      pure (.forOf (some .const_) lhs rhs body)
+      if asyncForOf then
+        pure (.forOfEx (some .const_) lhs rhs body .async)
+      else
+        pure (.forOf (some .const_) lhs rhs body)
     else
       expectPunct ";"
       let cond <- if (← consumePunct? ";") then pure none else (some <$> parseExprM <* expectPunct ";")
@@ -1031,7 +1129,10 @@ private partial def parseForStmt : ParserM Stmt := do
       expectPunct ")"
       let lhs <- liftExcept (parseForLHSFromExpr initExpr)
       let body <- parseStmt
-      pure (.forOf none lhs rhs body)
+      if asyncForOf then
+        pure (.forOfEx none lhs rhs body .async)
+      else
+        pure (.forOf none lhs rhs body)
     else
       expectPunct ";"
       let cond <- if (← consumePunct? ";") then pure none else (some <$> parseExprM <* expectPunct ";")
@@ -1104,16 +1205,19 @@ private partial def parseStmt : ParserM Stmt := do
       match (← parseBlockStmt) with
       | .block xs => pure xs
       | _ => throw "internal parser error: block expected"
+    skipNewlines
     let catchClause <-
       if (← consumeKeyword? "catch") then
-        expectPunct "("
         let param <-
-          if (← consumePunct? ")") then
-            pure none
+          if (← consumePunct? "(") then
+            if (← consumePunct? ")") then
+              pure none
+            else
+              let p <- parseBindingPatternM
+              expectPunct ")"
+              pure (some p)
           else
-            let p <- parsePatternFromIdent <$> parseIdentLike
-            expectPunct ")"
-            pure (some p)
+            pure none
         let catchBody <-
           match (← parseBlockStmt) with
           | .block xs => pure xs
@@ -1121,6 +1225,7 @@ private partial def parseStmt : ParserM Stmt := do
         pure (some (.mk param catchBody))
       else
         pure none
+    skipNewlines
     let finallyBody <-
       if (← consumeKeyword? "finally") then
         match (← parseBlockStmt) with
