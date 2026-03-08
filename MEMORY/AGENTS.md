@@ -43,3 +43,8 @@ Template:
   Symptom: Reusing the same `let rec` name in different pattern-match branches of one `partial def` caused `... has already been declared`.
   Fix: Give each branch-local recursive helper a unique name (`stepCallArgs`, `stepNewObjArgs`, etc.).
   Guardrail: In a single `def` body, do not repeat local recursive helper names across branches.
+
+- [2026-03-08] Context: `tests/run_tests.sh`
+  Symptom: `./tests/run_tests.sh --fast` can fail before tests with missing local dirs (`mktemp ... test_logs/...: No such file or directory`, `find: tests/e2e: No such file or directory`).
+  Fix: Ensure `test_logs/` and `tests/e2e/` exist before running (`mkdir -p test_logs tests/e2e`).
+  Guardrail: In fresh worktrees, create both directories prior to invoking the test harness.

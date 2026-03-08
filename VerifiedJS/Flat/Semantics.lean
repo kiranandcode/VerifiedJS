@@ -106,6 +106,49 @@ private def allocFreshObject (h : Core.Heap) : Nat × Core.Heap :=
     { objects := h.objects.push [], nextAddr := addr + 1 }
   (addr, h')
 
+private def flatToCoreValue : Value → Core.Value
+  | .null => .null
+  | .undefined => .undefined
+  | .bool b => .bool b
+  | .number n => .number n
+  | .string s => .string s
+  | .object addr => .object addr
+  -- Core heap payloads cannot encode Flat env pointers; keep callable identity only.
+  | .closure funcIdx _ => .function funcIdx
+
+private def coreToFlatValue : Core.Value → Value
+  | .null => .null
+  | .undefined => .undefined
+  | .bool b => .bool b
+  | .number n => .number n
+  | .string s => .string s
+  | .object addr => .object addr
+  | .function idx => .closure idx 0
+
+private def envSlotKey (idx : Nat) : PropName :=
+  "__env" ++ toString idx
+
+private def encodeEnvPropsAux (idx : Nat) (values : List Value) : List (PropName × Core.Value) :=
+  match values with
+  | [] => []
+  | v :: rest => (envSlotKey idx, flatToCoreValue v) :: encodeEnvPropsAux (idx + 1) rest
+
+private def encodeEnvProps (values : List Value) : List (PropName × Core.Value) :=
+  encodeEnvPropsAux 0 values
+
+private def allocEnvObject (h : Core.Heap) (values : List Value) : Nat × Core.Heap :=
+  let addr := h.nextAddr
+  let h' : Core.Heap :=
+    { objects := h.objects.push (encodeEnvProps values), nextAddr := addr + 1 }
+  (addr, h')
+
+private def heapObjectAt? (h : Core.Heap) (addr : Nat) : Option (List (Core.PropName × Core.Value)) :=
+  if hAddr : addr < h.objects.size then
+    let _ := hAddr
+    some (h.objects[addr]!)
+  else
+    none
+
 private def typeofValue : Value → Value
   | .undefined => .string "undefined"
   | .null => .string "object"
@@ -455,11 +498,22 @@ partial def step? (s : State) : Option (Core.TraceEvent × State) :=
           | none => none
   | .getEnv envExpr idx =>
       match exprValue? envExpr with
-      | some (.object _) =>
-          let key := "__env" ++ toString idx
-          let msg := "unimplemented flat env lookup for key " ++ key
-          let s' := pushTrace { s with expr := .lit .undefined } (.error msg)
-          some (.error msg, s')
+      | some (.object envPtr) =>
+          match heapObjectAt? s.heap envPtr with
+          | some props =>
+              let key := envSlotKey idx
+              match props.find? (fun kv => kv.fst == key) with
+              | some kv =>
+                  let s' := pushTrace { s with expr := .lit (coreToFlatValue kv.snd) } .silent
+                  some (.silent, s')
+              | none =>
+                  let msg := "ReferenceError: missing env slot " ++ key
+                  let s' := pushTrace { s with expr := .lit .undefined } (.error msg)
+                  some (.error msg, s')
+          | none =>
+              let msg := "TypeError: dangling env pointer " ++ toString envPtr
+              let s' := pushTrace { s with expr := .lit .undefined } (.error msg)
+              some (.error msg, s')
       | some _ =>
           let s' := pushTrace { s with expr := .lit .undefined } (.error "TypeError: invalid env pointer")
           some (.error "TypeError: invalid env pointer", s')
@@ -471,8 +525,8 @@ partial def step? (s : State) : Option (Core.TraceEvent × State) :=
           | none => none
   | .makeEnv values =>
       match valuesFromExprList? values with
-      | some _ =>
-          let (addr, heap') := allocFreshObject s.heap
+      | some captured =>
+          let (addr, heap') := allocEnvObject s.heap captured
           let s' := pushTrace { s with expr := .lit (.object addr), heap := heap' } .silent
           some (.silent, s')
       | none =>
