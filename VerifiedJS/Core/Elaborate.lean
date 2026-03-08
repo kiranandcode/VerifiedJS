@@ -106,6 +106,60 @@ private def propKeyToString : Source.PropertyKey → String
 
 mutual
 
+private partial def propKeyAccessExpr (obj : Core.Expr) (k : Source.PropertyKey) : ElabM Core.Expr := do
+  match k with
+  | .computed ke =>
+    pure (.getIndex obj (← elabExpr ke))
+  | _ =>
+    pure (.getProp obj (propKeyToString k))
+
+private partial def elabPatternAssignExpr (pat : Source.Pattern) (valueExpr : Core.Expr) : ElabM Core.Expr := do
+  match pat with
+  | .ident name none =>
+    pure (.assign name valueExpr)
+  | .ident name (some initExpr) => do
+    let initCore ← elabExpr initExpr
+    pure (.assign name (.«if» (.binary .strictEq valueExpr (.lit .undefined)) initCore valueExpr))
+  | .assign inner initExpr => do
+    let initCore ← elabExpr initExpr
+    let resolved := .«if» (.binary .strictEq valueExpr (.lit .undefined)) initCore valueExpr
+    elabPatternAssignExpr inner resolved
+  | .object props rest => do
+    let mut assigns : List Core.Expr := []
+    for p in props do
+      let next ← match p with
+        | .keyValue key subpat => do
+          let propExpr ← propKeyAccessExpr valueExpr key
+          elabPatternAssignExpr subpat propExpr
+        | .shorthand name initOpt => do
+          let base := .getProp valueExpr name
+          match initOpt with
+          | some initExpr => do
+            let initCore ← elabExpr initExpr
+            pure (.assign name (.«if» (.binary .strictEq base (.lit .undefined)) initCore base))
+          | none =>
+            pure (.assign name base)
+      assigns := assigns ++ [next]
+    let restAssign ← match rest with
+      | some restPat => elabPatternAssignExpr restPat valueExpr
+      | none => pure undef
+    pure (seqExprs (assigns ++ [restAssign]))
+  | .array elems rest => do
+    let mut assigns : List Core.Expr := []
+    let mut idx : Nat := 0
+    for elem in elems do
+      match elem with
+      | some subpat => do
+        let elemExpr : Core.Expr := .getIndex valueExpr (.lit (.number (Float.ofNat idx)))
+        let next ← elabPatternAssignExpr subpat elemExpr
+        assigns := assigns ++ [next]
+      | none => pure ()
+      idx := idx + 1
+    let restAssign ← match rest with
+      | some restPat => elabPatternAssignExpr restPat valueExpr
+      | none => pure undef
+    pure (seqExprs (assigns ++ [restAssign]))
+
 /-- Elaborate a Source expression to a Core expression. -/
 private partial def elabExpr (e : Source.Expr) : ElabM Core.Expr := do
   match e with
@@ -132,10 +186,10 @@ private partial def elabExpr (e : Source.Expr) : ElabM Core.Expr := do
         corePairs := corePairs ++ [(key, val)]
       | .shorthand name =>
         corePairs := corePairs ++ [(name, .var name)]
-      | .method _kind k params body _ _ => do
+      | .method _kind k params body isAsync isGenerator => do
         let key := propKeyToString k
         let bodyExpr ← elabStmts body
-        corePairs := corePairs ++ [(key, .functionDef none (paramsToNames params) bodyExpr false false)]
+        corePairs := corePairs ++ [(key, .functionDef none (paramsToNames params) bodyExpr isAsync isGenerator)]
       | .spread ex => do
         -- spread in object literal: approximate as a single entry
         let val ← elabExpr ex
@@ -336,9 +390,10 @@ private partial def elabAssign (op : Source.AssignOp) (target : Source.AssignTar
       | some bop =>
         pure (.setProp o pname (.binary bop (.getProp o pname) rhsExpr))
       | none => pure (.setProp o pname rhsExpr)
-  | .pattern _ =>
-    -- Destructuring assignment: not fully supported
-    pure undef
+  | .pattern pat =>
+    let tmpName := "__assign_pat_tmp"
+    let assignExpr ← elabPatternAssignExpr pat (.var tmpName)
+    pure (.«let» tmpName rhsExpr (.seq assignExpr (.var tmpName)))
 
 /-- Elaborate a Source statement to a Core expression. -/
 private partial def elabStmt (s : Source.Stmt) : ElabM Core.Expr := do

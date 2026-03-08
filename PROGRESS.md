@@ -51,6 +51,6 @@
 ## Metrics
 
 - Sorry count: TBD (run `./scripts/sorry_report.sh`)
-- Test262 pass rate: fast sample improved from 0/120 to 38/120 passes on deterministic seed `local` (2026-03-08, `scripts/run_test262_compare.sh`)
+- Test262 pass rate: deterministic full sample reached 167/500 passes, 0 fails, 16 xfails, 317 skips (`./scripts/run_test262_compare.sh --full --sample 500 --seed local`, 2026-03-08)
 - Flagship parse rate: 96.30% (1976/2052)
 - E2E tests: 10 handcrafted JS programs

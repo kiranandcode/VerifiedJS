@@ -306,13 +306,19 @@ def exprValue? : Expr → Option Flat.Value
 partial def step? (s : State) : Option (Core.TraceEvent × State) :=
   match s.expr with
   | .trivial t =>
-      match evalTrivial s.env t with
-      | .ok v =>
-          let s' := pushTrace { s with expr := .trivial (trivialOfValue v) } .silent
-          some (.silent, s')
-      | .error msg =>
-          let s' := pushTrace { s with expr := .trivial .litUndefined } (.error msg)
-          some (.error msg, s')
+      match t with
+      | .var name =>
+          match s.env.lookup name with
+          | some v =>
+              let s' := pushTrace { s with expr := .trivial (trivialOfValue v) } .silent
+              some (.silent, s')
+          | none =>
+              let msg := s!"ReferenceError: {name}"
+              let s' := pushTrace { s with expr := .trivial .litUndefined } (.error msg)
+              some (.error msg, s')
+      | _ =>
+          -- Literal trivials are final values in ANF and do not step further.
+          none
   | .«let» name rhs body =>
       let r := evalComplex s rhs
       let s' := pushTrace { s with expr := body, env := r.env.extend name r.value, heap := r.heap } r.event

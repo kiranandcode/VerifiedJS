@@ -57,10 +57,10 @@ private def advancePos (line col offset : Nat) (c : Char) : Nat × Nat × Nat :=
     (line, col + 1, offset + 1)
 
 private def isIdentStart (c : Char) : Bool :=
-  c.isAlpha || c = '_' || c = '$'
+  c.isAlpha || c = '_' || c = '$' || c.toNat > 0x7F
 
 private def isIdentContinue (c : Char) : Bool :=
-  isIdentStart c || c.isDigit
+  isIdentStart c || c.isDigit || c.toNat = 0x200C || c.toNat = 0x200D
 
 private def keywordSet : List String :=
   [ "break", "case", "catch", "class", "const", "continue", "debugger", "default"
@@ -98,14 +98,69 @@ private def hexDigitVal? (c : Char) : Option Nat :=
     none
 
 private def parseUnicodeEscapeStart? : List Char → Option (Char × List Char × Nat) := fun chars =>
+  let parseFixed? : Option (Char × List Char × Nat) :=
+    match chars with
+    | '\\' :: 'u' :: h1 :: h2 :: h3 :: h4 :: rest =>
+        match hexDigitVal? h1, hexDigitVal? h2, hexDigitVal? h3, hexDigitVal? h4 with
+        | some v1, some v2, some v3, some v4 =>
+            let cp := v1 * 4096 + v2 * 256 + v3 * 16 + v4
+            some (Char.ofNat cp, rest, 6)
+        | _, _, _, _ => none
+    | _ => none
+  let parseBraced? : Option (Char × List Char × Nat) :=
+    match chars with
+    | '\\' :: 'u' :: '{' :: rest =>
+        let rec gather (rs : List Char) (acc : Nat) (digits : Nat) : Option (Char × List Char × Nat) :=
+          match rs with
+          | '}' :: tail =>
+              if digits = 0 || acc > 0x10FFFF then
+                none
+              else
+                some (Char.ofNat acc, tail, digits + 4)
+          | c :: tail =>
+              match hexDigitVal? c with
+              | some v => gather tail (acc * 16 + v) (digits + 1)
+              | none => none
+          | [] => none
+        gather rest 0 0
+    | _ => none
+  match parseBraced? with
+  | some r => some r
+  | none => parseFixed?
+
+private partial def readIdentifierWithEscapes (chars : List Char) : Option (String × List Char × Nat) :=
+  let rec loop (rest accRev : List Char) (consumed : Nat) : Option (String × List Char × Nat) :=
+    match rest with
+    | c :: cs =>
+        if isIdentContinue c then
+          loop cs (c :: accRev) (consumed + 1)
+        else
+          match parseUnicodeEscapeStart? rest with
+          | some (escCh, rest', escConsumed) =>
+              if isIdentContinue escCh then
+                loop rest' (escCh :: accRev) (consumed + escConsumed)
+              else
+                some (String.mk accRev.reverse, rest, consumed)
+          | none =>
+              some (String.mk accRev.reverse, rest, consumed)
+    | [] =>
+        some (String.mk accRev.reverse, [], consumed)
   match chars with
-  | '\\' :: 'u' :: h1 :: h2 :: h3 :: h4 :: rest =>
-      match hexDigitVal? h1, hexDigitVal? h2, hexDigitVal? h3, hexDigitVal? h4 with
-      | some v1, some v2, some v3, some v4 =>
-          let cp := v1 * 4096 + v2 * 256 + v3 * 16 + v4
-          some (Char.ofNat cp, rest, 6)
-      | _, _, _, _ => none
-  | _ => none
+  | c :: cs =>
+      if isIdentStart c then
+        loop cs [c] 1
+      else
+        match parseUnicodeEscapeStart? chars with
+        | some (firstCh, rest, consumed) =>
+            if isIdentStart firstCh then
+              loop rest [firstCh] consumed
+            else
+              none
+        | none => none
+  | [] => none
+
+private def startsIdentifierWithEscapes (chars : List Char) : Bool :=
+  (readIdentifierWithEscapes chars).isSome
 
 private def stripUnderscoresChars (cs : List Char) : List Char :=
   cs.filter (fun c => c != '_')
@@ -361,8 +416,25 @@ private def punct2Set : List String :=
 private def punct3Set : List String :=
   ["===", "!==", "<<=", ">>=", "**=", ">>>", ">>>=", "...", "??=", "&&=", "||="]
 
+private def punct4Set : List String :=
+  [">>>="]
+
 private def readPunct (chars : List Char) : String × List Char :=
   match chars with
+  | a :: b :: c :: d :: rest =>
+    let s4 := String.mk [a, b, c, d]
+    if punct4Set.contains s4 then
+      (s4, rest)
+    else
+      let s3 := String.mk [a, b, c]
+      if punct3Set.contains s3 then
+        (s3, d :: rest)
+      else
+        let s2 := String.mk [a, b]
+        if punct2Set.contains s2 then
+          (s2, c :: d :: rest)
+        else
+          (String.mk [a], b :: c :: d :: rest)
   | a :: b :: c :: rest =>
     let s3 := String.mk [a, b, c]
     if punct3Set.contains s3 then
@@ -406,6 +478,20 @@ partial def tokenizeChars
         tokenizeChars rest line (col + consumed) (offset + consumed) expectRegex parenDepth controlHeaderParens pendingControlHeader braceDepth controlBlockBraces pendingControlBlock acc
       | _ =>
         throw s!"Lexer error at {line}:{col}: unexpected character `#`"
+    else if c = '#' then
+      match cs with
+      | '\\' :: _ =>
+        match readIdentifierWithEscapes cs with
+        | some (name, rest, consumedIdent) =>
+          let hashTok : Token := { kind := .punct "#", pos := { line, col, offset } }
+          let identTok : Token := { kind := .ident name, pos := { line, col := col + 1, offset := offset + 1 } }
+          let consumed := consumedIdent + 1
+          tokenizeChars rest line (col + consumed) (offset + consumed) false parenDepth controlHeaderParens false braceDepth controlBlockBraces false (identTok :: hashTok :: acc)
+        | none =>
+          throw s!"Lexer error at {line}:{col}: invalid private name escape"
+      | _ =>
+        let tok : Token := { kind := .punct "#", pos := { line, col, offset } }
+        tokenizeChars cs line (col + 1) (offset + 1) true parenDepth controlHeaderParens false braceDepth controlBlockBraces false (tok :: acc)
     else if c = ' ' || c = '\t' || c = '\r' then
       let (_, nextCol, nextOffset) := advancePos line col offset c
       tokenizeChars cs line nextCol nextOffset expectRegex parenDepth controlHeaderParens pendingControlHeader braceDepth controlBlockBraces pendingControlBlock acc
@@ -413,35 +499,18 @@ partial def tokenizeChars
       let tok : Token := { kind := .newline, pos := { line, col, offset } }
       let (nextLine, nextCol, nextOffset) := advancePos line col offset c
       tokenizeChars cs nextLine nextCol nextOffset expectRegex parenDepth controlHeaderParens pendingControlHeader braceDepth controlBlockBraces pendingControlBlock (tok :: acc)
-    else if isIdentStart c then
-      let (idChars, rest) := readWhile (c :: cs) isIdentContinue
-      let s := String.mk idChars
-      let kind := if isKeyword s then TokenKind.kw s else TokenKind.ident s
-      let tok : Token := { kind, pos := { line, col, offset } }
-      let pendingControlHeader' := match kind with
-        | .kw k => controlHeaderKeyword k
-        | _ => false
-      tokenizeChars rest line (col + idChars.length) (offset + idChars.length)
-        (not (tokenCanEndExpression kind)) parenDepth controlHeaderParens pendingControlHeader' braceDepth controlBlockBraces false (tok :: acc)
-    else if c = '\\' then
-      match parseUnicodeEscapeStart? (c :: cs) with
-      | some (firstCh, rest0, consumed0) =>
-          if isIdentStart firstCh then
-            let (tailChars, rest) := readWhile rest0 isIdentContinue
-            let idChars := firstCh :: tailChars
-            let s := String.mk idChars
-            let kind := if isKeyword s then TokenKind.kw s else TokenKind.ident s
-            let tok : Token := { kind, pos := { line, col, offset } }
-            let pendingControlHeader' := match kind with
-              | .kw k => controlHeaderKeyword k
-              | _ => false
-            let consumed := consumed0 + tailChars.length
-            tokenizeChars rest line (col + consumed) (offset + consumed)
-              (not (tokenCanEndExpression kind)) parenDepth controlHeaderParens pendingControlHeader' braceDepth controlBlockBraces false (tok :: acc)
-          else
-            throw s!"Lexer error at {line}:{col}: invalid unicode escape identifier start"
+    else if startsIdentifierWithEscapes (c :: cs) then
+      match readIdentifierWithEscapes (c :: cs) with
+      | some (s, rest, consumed) =>
+          let kind := if isKeyword s then TokenKind.kw s else TokenKind.ident s
+          let tok : Token := { kind, pos := { line, col, offset } }
+          let pendingControlHeader' := match kind with
+            | .kw k => controlHeaderKeyword k
+            | _ => false
+          tokenizeChars rest line (col + consumed) (offset + consumed)
+            (not (tokenCanEndExpression kind)) parenDepth controlHeaderParens pendingControlHeader' braceDepth controlBlockBraces false (tok :: acc)
       | none =>
-          throw s!"Lexer error at {line}:{col}: invalid unicode escape"
+          throw s!"Lexer error at {line}:{col}: invalid unicode escape identifier start"
     else if c.isDigit then
       let (numRaw, rest0) := readNumberLiteral (c :: cs)
       let (kind, rest, consumed) :=

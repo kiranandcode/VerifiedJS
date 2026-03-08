@@ -46,6 +46,24 @@ HARNESS_PRELUDE='(function (g) {
       }
     };
   }
+  if (typeof assertFn.throws !== "function") {
+    assertFn.throws = function throws(expectedErrorConstructor, fn, message) {
+      var threw = false;
+      try {
+        fn();
+      } catch (err) {
+        threw = true;
+        if (typeof expectedErrorConstructor === "function" && !(err instanceof expectedErrorConstructor)) {
+          throw new g.Test262Error(
+            message || ("Expected throw " + expectedErrorConstructor.name + " but got " + (err && err.name))
+          );
+        }
+      }
+      if (!threw) {
+        throw new g.Test262Error(message || "Expected function to throw");
+      }
+    };
+  }
 })(typeof globalThis !== "undefined" ? globalThis : this);'
 
 usage() {
@@ -169,8 +187,8 @@ limitation_reason() {
     echo "annex-b"
     return
   fi
-  if has_frontmatter_pattern "$file" '^features:.*destructuring-assignment'; then
-    echo "destructuring"
+  if [[ "$file" == *"/language/statements/for/dstr/"* ]]; then
+    echo "destructuring-for-statement"
     return
   fi
   if grep -Eq '\?\.|\?\?' "$file"; then
@@ -185,11 +203,6 @@ limitation_reason() {
     echo "for-in-of"
     return
   fi
-  if grep -Eq '\([[:space:]]*\{[^\n\}]*\}[[:space:]]*=|\{[^\n\}]*\}[[:space:]]*=|\[[^\n\]]*\][[:space:]]*=' "$file"; then
-    echo "destructuring"
-    return
-  fi
-
   echo ""
 }
 
@@ -206,10 +219,6 @@ is_meta_skip() {
     return
   fi
 
-  if has_frontmatter_pattern "$file" '^includes:'; then
-    echo "harness-includes"
-    return
-  fi
   if has_frontmatter_pattern "$file" '^flags:.*\b(module|async|raw|CanBlockIsTrue)\b'; then
     echo "unsupported-flags"
     return
@@ -221,6 +230,26 @@ is_meta_skip() {
   fi
 
   echo ""
+}
+
+extract_includes() {
+  local file="$1"
+  frontmatter "$file" | awk '
+    BEGIN { inIncludes = 0 }
+    /^[[:space:]]*includes:[[:space:]]*$/ { inIncludes = 1; next }
+    inIncludes {
+      if ($0 ~ /^[[:space:]]*-[[:space:]]+/) {
+        line = $0
+        sub(/^[[:space:]]*-[[:space:]]+/, "", line)
+        sub(/[[:space:]]+$/, "", line)
+        print line
+        next
+      }
+      if ($0 ~ /^[[:space:]]*$/) { next }
+      if ($0 ~ /^[[:space:]]*[A-Za-z0-9_]+:[[:space:]]*/) { exit }
+      exit
+    }
+  '
 }
 
 PASS=0
@@ -336,9 +365,31 @@ for file in "${FILES[@]}"; do
     continue
   fi
 
+  include_blob="$TMP_ROOT/includes_${TOTAL}.js"
+  : > "$include_blob"
+  missing_include=""
+  if ! is_case_file "$file"; then
+    while IFS= read -r include_file; do
+      [[ -z "$include_file" ]] && continue
+      include_path="$ROOT_DIR/tests/test262/harness/$include_file"
+      if [[ ! -f "$include_path" ]]; then
+        missing_include="$include_file"
+        break
+      fi
+      cat "$include_path" >> "$include_blob"
+      printf '\n' >> "$include_blob"
+    done < <(extract_includes "$file")
+  fi
+  if [[ -n "$missing_include" ]]; then
+    echo "TEST262_SKIP include-missing:${missing_include} ${file}"
+    SKIP=$((SKIP + 1))
+    continue
+  fi
+
   harnessed_source="$TMP_ROOT/harness_${TOTAL}.js"
   {
     printf '%s\n' "$HARNESS_PRELUDE"
+    cat "$include_blob"
     cat "$source_file"
   } > "$harnessed_source"
   source_file="$harnessed_source"

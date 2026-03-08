@@ -45,7 +45,7 @@
 - [ ] Write ARCHITECTURE.md with IL descriptions and TCB boundary
 - [ ] Deduplicate utility code across modules
 - [ ] Review and update spec citations
-- [ ] Multi-file compilation support (currently single-file only; no module resolution, import/export linking)
+- [x] Multi-file compilation support (module entry linking via `--module` with relative import/export resolution, including re-exports and namespace imports)
 
 ## Validated Completed (Supervisor)
 - [x] Define JS.Source.AST inductive types (full ECMAScript 2020) — VALIDATED 2026-03-08

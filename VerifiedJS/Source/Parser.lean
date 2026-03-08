@@ -280,10 +280,44 @@ private partial def parseBindingPatternM : ParserM Pattern := do
     pure (.ident "__arrPattern" none)
   | _ => failExpected "binding pattern"
 
-private def parsePatternFromExpr (e : Expr) : Option Pattern :=
-  match e with
-  | .ident n => some (.ident n none)
-  | _ => none
+private partial def parsePatternFromExpr (e : Expr) : Option Pattern :=
+  let rec go (expr : Expr) : Option Pattern :=
+    match expr with
+    | .ident n => some (.ident n none)
+    | .assign op lhs rhs =>
+      match op with
+      | .assign =>
+        match lhs with
+        | .ident n => some (.assign (.ident n none) rhs)
+        | .pattern p => some (.assign p rhs)
+        | _ => none
+      | _ => none
+    | .object props =>
+      let rec goProps (ps : List Property) (acc : List PatternProp) (rest : Option Pattern) :
+          Option (List PatternProp × Option Pattern) :=
+        match ps with
+        | [] => some (acc.reverse, rest)
+        | p :: tl =>
+          match p with
+          | .keyValue key value =>
+            match go value with
+            | some pat => goProps tl (.keyValue key pat :: acc) rest
+            | none => none
+          | .shorthand name =>
+            goProps tl ((.shorthand name none) :: acc) rest
+          | .spread spreadExpr =>
+            match rest with
+            | some _ => none
+            | none =>
+              match go spreadExpr with
+              | some restPat => goProps tl acc (some restPat)
+              | none => none
+          | .method .. => none
+      match goProps props [] none with
+      | some (patProps, rest) => some (.object patProps rest)
+      | none => none
+    | _ => none
+  go e
 
 private def tokenIsPunct (t : Token) (p : String) : Bool :=
   match t.kind with
@@ -417,6 +451,12 @@ private partial def parseObjectLiteral : ParserM Expr := do
       let spreadExpr <- parseAssignmentM
       let _ <- consumePunct? ","
       loop (.spread spreadExpr :: acc)
+    else if (← consumePunct? "*") then
+      let key <- parsePropertyKey
+      let params <- parseParamList
+      let body <- parseFunctionBody
+      let _ <- consumePunct? ","
+      loop (.method .method key params body false true :: acc)
     else
       let key <- parsePropertyKey
       if (← consumePunct? ":") then
@@ -964,7 +1004,12 @@ private partial def parseAssignmentM : ParserM Expr := do
         | some op =>
           match asAssignTarget lhs with
           | none =>
-            throw "Invalid assignment target"
+            match parsePatternFromExpr lhs with
+            | some pat =>
+              let rhs <- parseAssignmentM
+              pure (.assign op (.pattern pat) rhs)
+            | none =>
+              throw "Invalid assignment target"
           | some target =>
             let rhs <- parseAssignmentM
             pure (.assign op target rhs)
@@ -1278,6 +1323,7 @@ private partial def parseStmt : ParserM Stmt := do
     pure (.switch disc cases)
   | .kw "try" =>
     let _ <- bump
+    skipNewlines
     let body <-
       match (← parseBlockStmt) with
       | .block xs => pure xs
@@ -1295,7 +1341,8 @@ private partial def parseStmt : ParserM Stmt := do
               pure (some p)
           else
             pure none
-        let catchBody <-
+        let catchBody <- do
+          skipNewlines
           match (← parseBlockStmt) with
           | .block xs => pure xs
           | _ => throw "internal parser error: block expected"
@@ -1305,9 +1352,11 @@ private partial def parseStmt : ParserM Stmt := do
     skipNewlines
     let finallyBody <-
       if (← consumeKeyword? "finally") then
-        match (← parseBlockStmt) with
-        | .block xs => pure (some xs)
-        | _ => throw "internal parser error: block expected"
+        do
+          skipNewlines
+          match (← parseBlockStmt) with
+          | .block xs => pure (some xs)
+          | _ => throw "internal parser error: block expected"
       else
         pure none
     if catchClause.isNone && finallyBody.isNone then

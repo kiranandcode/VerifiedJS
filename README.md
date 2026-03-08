@@ -53,6 +53,9 @@ lake exe verifiedjs hello.js --emit=wat       # WebAssembly Text Format
 # 4. Compile to .wasm binary
 lake exe verifiedjs hello.js -o hello.wasm
 
+# 4b. Compile an ES module entry with linked relative imports/exports
+lake exe verifiedjs src/main.js --module -o app.wasm
+
 # 5. Run with wasmtime (simple arithmetic programs work)
 wasmtime hello.wasm
 
@@ -65,7 +68,7 @@ bash tests/e2e/run_e2e.sh
 - **Runtime semantics are still stubbed**: Runtime helper functions are now emitted as valid Wasm and execute under `wasmtime`, but many helpers (`__rt_call`, property/global/object ops) still return placeholders instead of full ECMA-262 behavior
 - **Globals**: Unbound identifiers are lowered via a runtime global-lookup stub (`__rt_getGlobal`) that currently returns `undefined`; semantic global object behavior is not implemented yet
 - **Float precision**: Numbers are currently lowered as i32 pointers; proper NaN-boxing/tagged pointers needed
-- **Single-file only**: No module resolution or import/export linking yet
+- **Module support is linker-based (partial)**: `--module` resolves relative imports/exports across files (including named/default/namespace imports and re-exports), but host module semantics and full live-binding behavior are still incomplete
 - **Language features**: Classes, for-in/of, destructuring, optional chaining are stubbed in elaboration
 
 ---

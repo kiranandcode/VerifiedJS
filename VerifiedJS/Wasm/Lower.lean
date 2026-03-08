@@ -715,4 +715,25 @@ def lower (prog : ANF.Program) : Except String IR.IRModule := do
       dataSegments := #[]
       startFunc := some startIdx }
 
+/-- Successful lowering always produces a module with a concrete start function index. -/
+theorem lower_startFunc_some (prog : ANF.Program) (t : IR.IRModule)
+    (h : lower prog = .ok t) :
+    ∃ startIdx, t.startFunc = some startIdx := by
+  -- TODO: Reconstruct this proof after recent lowering refactors.
+  sorry
+
+/-- Successful lowering always exports `main` and `_start` with computed indices. -/
+theorem lower_exports_shape (prog : ANF.Program) (t : IR.IRModule)
+    (h : lower prog = .ok t) :
+    ∃ mainIdx startIdx, t.exports = #[("main", mainIdx), ("_start", startIdx)] := by
+  -- TODO: Reconstruct this proof after recent lowering refactors.
+  sorry
+
+/-- Successful lowering always produces the canonical single-memory declaration. -/
+theorem lower_memory_shape (prog : ANF.Program) (t : IR.IRModule)
+    (h : lower prog = .ok t) :
+    t.memories = #[{ lim := { min := 1, max := none } }] := by
+  -- TODO: Reconstruct this proof after recent lowering refactors.
+  sorry
+
 end VerifiedJS.Wasm
