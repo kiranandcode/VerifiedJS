@@ -759,6 +759,9 @@ git submodule update --init --recursive          # fetch all submodules (test262
 ./scripts/run_e2e.sh tests/flagship/prettier/    # flagship target
 ./scripts/agent_supervisor.sh spawn --count 3 --dry-run       # create N agent worktrees and run one round
 ./scripts/agent_supervisor.sh supervise --count 2 --max-rounds 10  # keep spawning rounds until tests pass
+python3 monitoring/backend/app.py                    # Flask live monitor API (logs/tasks/locks)
+(cd monitoring/frontend && npm run dev)              # Svelte live monitor UI
+./monitoring/run_monitor.sh                          # run Flask + Svelte monitor together
 ```
 
 `scripts/agent_supervisor.sh` assigns tasks centrally from `TASKS.md` and uses atomic local locks in `.agent_locks/` to prevent duplicate task claims across parallel worktrees.
