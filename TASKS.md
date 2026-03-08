@@ -2,16 +2,24 @@
 
 ## Priority 1 (blocking — foundations)
 - [ ] Parser milestone: parse ≥95% of JS files selected by `scripts/parse_flagship.sh --full` (current: 86.79% = 1781/2052 on 2026-03-08) — TODO(supervisor): raise parse_flagship pass-rate to >=0.95 before re-validation
+- [ ] Make test suite cover more of the parser
 - [ ] Define JS.Core.Semantics small-step LTS
+- [ ] Make test suite cover more the LTS
 - [ ] Define JS.ANF.Syntax inductive types
 - [ ] Define Wasm.Syntax (port from WasmCert-Coq) — TODO(supervisor): Move `Define Wasm.Syntax (port from WasmCert-Coq)` into `Validated Completed (Supervisor)` in `TASKS.md` after supervisor validation.
+- [ ] Make test suite check the ANF converstion
 
 ## Priority 2 (important — passes and interpreters)
 - [ ] Implement Core.Elaborate (JS.AST → JS.Core) — SPEC: §14.6, §13.15.5, §13.7
+- [ ] Make test suite check core elaboration
 - [ ] Implement Flat.ClosureConvert (JS.Core → JS.Flat)
+- [ ] Make test suite check for flat closure conversion
 - [ ] Implement ANF.Convert (JS.Flat → JS.ANF)
+- [ ] Make test suite check for ANF conversion
 - [ ] Implement Wasm.Lower (JS.ANF → Wasm.IR)
+- [ ] Make test suite check for WASM lowering
 - [ ] Implement Wasm.Emit (Wasm.IR → Wasm.AST)
+- [ ] Make test suite check for WASM emitting
 - [ ] Implement Wasm.Binary (Wasm.AST → .wasm)
 - [ ] Write Core.Interp reference interpreter
 - [ ] Write Flat.Interp reference interpreter
