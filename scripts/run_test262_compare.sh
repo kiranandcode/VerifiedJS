@@ -98,10 +98,6 @@ has_frontmatter_pattern() {
 limitation_reason() {
   local file="$1"
 
-  if grep -Eq '(^|[^[:alnum:]_])(console|Math|JSON|Reflect|Proxy|Atomics|Intl|Test262Error|assert|\$DONE)\b' "$file"; then
-    echo "globals"
-    return
-  fi
   if grep -Eq '\?\.|\?\?' "$file"; then
     echo "optional-chaining-or-nullish"
     return

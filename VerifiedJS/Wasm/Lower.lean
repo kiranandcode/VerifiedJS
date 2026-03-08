@@ -50,6 +50,7 @@ def binaryLe : RuntimeFuncIdx := 30
 def binaryGe : RuntimeFuncIdx := 31
 def binaryEq : RuntimeFuncIdx := 32
 def binaryNeq : RuntimeFuncIdx := 33
+def getGlobal : RuntimeFuncIdx := 34
 
 end RuntimeIdx
 
@@ -168,7 +169,9 @@ private def lowerTrivial (ctx : LowerCtx) : ANF.Trivial → LowerM (List IR.IRIn
   | .var name =>
       match lookupLocal ctx name with
       | .ok idx => pure [IR.IRInstr.localGet idx]
-      | .error err => throw err
+      | .error _ => do
+          let globalName ← mkStringRefConstM name
+          pure [globalName, IR.IRInstr.call RuntimeIdx.getGlobal]
   -- JS values are carried as NaN-boxed bit patterns reinterpreted as f64.
   | .litNull => pure [mkBoxedConst encodeNullBox]
   | .litUndefined => pure [mkBoxedConst encodeUndefinedBox]
@@ -193,12 +196,12 @@ private def lowerTrivialList (ctx : LowerCtx) (ts : List ANF.Trivial) : LowerM (
 private partial def lowerComplex (ctx : LowerCtx) : ANF.ComplexExpr → LowerM (List IR.IRInstr)
   | .trivial t => lowerTrivialM ctx t
   | .assign name value => do
-      let idx ←
-        match lookupLocal ctx name with
-        | .ok idx => pure idx
-        | .error err => throw err
       let valueCode ← lowerTrivialM ctx value
-      pure (valueCode ++ [IR.IRInstr.localSet idx, IR.IRInstr.localGet idx])
+      match lookupLocal ctx name with
+      | .ok idx => pure (valueCode ++ [IR.IRInstr.localSet idx, IR.IRInstr.localGet idx])
+      | .error _ =>
+          -- Non-local assignment target (e.g. global): keep compilation total by preserving RHS value.
+          pure valueCode
   | .call callee env args => do
       let calleeCode ← lowerTrivialM ctx callee
       let envCode ← lowerTrivialM ctx env
@@ -602,6 +605,9 @@ private def runtimeHelpers : Array IR.IRFunc :=
       body := [IR.IRInstr.localGet 0, IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.localGet 1,
         IR.IRInstr.call RuntimeIdx.toNumber, IR.IRInstr.binOp .f64 "raw_ne",
         IR.IRInstr.call RuntimeIdx.encodeBool, IR.IRInstr.return_] }
+    ,
+    { name := "__rt_getGlobal", params := [.f64], results := [.f64], locals := []
+      body := [mkBoxedConst encodeUndefinedBox, IR.IRInstr.return_] }
   ]
 
 /-- Lower an ANF program to Wasm IR. ECMA-262 runtime behavior is preserved structurally via ANF sequencing (§13). -/

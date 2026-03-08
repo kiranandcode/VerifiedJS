@@ -63,7 +63,7 @@ bash tests/e2e/run_e2e.sh
 ### Current Limitations
 
 - **Function calls**: Programs using function calls compile but wasmtime rejects them because runtime helper functions (call dispatch, closure creation, etc.) are not yet implemented as Wasm functions
-- **Globals**: References to global objects like `console`, `Math` fail with "unbound variable" during lowering
+- **Globals**: Unbound identifiers are lowered via a runtime global-lookup stub (`__rt_getGlobal`) that currently returns `undefined`; semantic global object behavior is not implemented yet
 - **Float precision**: Numbers are currently lowered as i32 pointers; proper NaN-boxing/tagged pointers needed
 - **Single-file only**: No module resolution or import/export linking yet
 - **Language features**: Classes, for-in/of, destructuring, optional chaining are stubbed in elaboration

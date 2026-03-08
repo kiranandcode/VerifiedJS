@@ -4,7 +4,7 @@
 - [ ] Parser milestone: parse ≥95% of JS files selected by `scripts/parse_flagship.sh --full` (current: 96.30% = 1976/2052 on 2026-03-08) — TODO(supervisor): symbolic checks failed
 - [ ] Fix value representation in Wasm lowering: all JS values are currently lowered as i32 (ptr) but numeric operations need proper f64 handling. Need NaN-boxing or tagged pointer scheme. — TODO(supervisor): Implement end-to-end NaN-box decode/encode in lowering and runtime helpers so numeric/truthy ops operate on decoded JS values, not raw boxed `f64` payloads.; Replace placeholder f64/`bits:` handling with full NaN-box encode/decode across lo — TODO(supervisor): agent merged code but did not mark task as [x] for supervisor validation
 - [ ] Fix float constant emission: `lowerTrivial` emits ptr constants for numbers but the Wasm emit maps ptr→i32, losing float precision. Numbers like `1.5` become `0`.
-- [ ] Handle global variable references in lowering (e.g., `console`, `Math`, `JSON`) — currently fails with "unbound variable"
+- [x] Handle global variable references in lowering (e.g., `console`, `Math`, `JSON`) — compile path now lowers unresolved identifiers via runtime global lookup stub; runtime semantics still TODO
 
 ## Priority 2 (important — completeness)
 - [ ] Elaborate: implement class declarations (SPEC §14.6) — currently stubs
