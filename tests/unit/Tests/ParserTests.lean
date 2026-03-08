@@ -123,6 +123,26 @@ def isImportDefaultNamed : Program -> Bool
       ] => true
   | _ => false
 
+def isDynamicImportExpr : Expr -> Bool
+  | .importCall (.lit (.string "pkg")) [] => true
+  | _ => false
+
+def isImportMetaExpr : Expr -> Bool
+  | .importMeta => true
+  | _ => false
+
+def isNewTargetExpr : Expr -> Bool
+  | .newTarget => true
+  | _ => false
+
+def isSuperMemberCall : Expr -> Bool
+  | .call (.member .super "m") [.ident "x"] => true
+  | _ => false
+
+def isDynamicImportStmt : Program -> Bool
+  | .script [ .expr (.importCall (.lit (.string "pkg")) []) ] => true
+  | _ => false
+
 #guard
   match parseExpr "1 + 2 * 3" with
   | .ok e => isMulPrecedence e
@@ -171,6 +191,31 @@ def isImportDefaultNamed : Program -> Bool
 #guard
   match parse "import mainDefault, { foo, bar as baz } from \"pkg\";" with
   | .ok p => isImportDefaultNamed p
+  | .error _ => false
+
+#guard
+  match parseExpr "import(\"pkg\")" with
+  | .ok e => isDynamicImportExpr e
+  | .error _ => false
+
+#guard
+  match parseExpr "import.meta" with
+  | .ok e => isImportMetaExpr e
+  | .error _ => false
+
+#guard
+  match parseExpr "new.target" with
+  | .ok e => isNewTargetExpr e
+  | .error _ => false
+
+#guard
+  match parseExpr "super.m(x)" with
+  | .ok e => isSuperMemberCall e
+  | .error _ => false
+
+#guard
+  match parse "import(\"pkg\");" with
+  | .ok p => isDynamicImportStmt p
   | .error _ => false
 
 #guard

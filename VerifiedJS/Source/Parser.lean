@@ -457,10 +457,28 @@ private partial def parsePrimaryM : ParserM Expr := do
     pure (.lit (.regex p f))
   | .ident n =>
     let _ <- bump
-    pure (.ident n)
+    if n = "super" then
+      pure Expr.super
+    else
+      pure (.ident n)
   | .kw "this" =>
     let _ <- bump
     pure .this
+  | .kw "super" =>
+    let _ <- bump
+    pure Expr.super
+  | .kw "import" =>
+    let _ <- bump
+    if (← consumePunct? ".") then
+      expectWord "meta"
+      pure .importMeta
+    else if (← consumePunct? "(") then
+      let args <- parseExprListUntil ")"
+      match args with
+      | [] => throw "dynamic import requires a source argument"
+      | source :: _ => pure (.importCall source [])
+    else
+      throw s!"Unsupported import expression at {t.pos.line}:{t.pos.col}"
   | .kw "function" =>
     parseFunctionExpr
   | .kw "class" =>
@@ -521,6 +539,17 @@ private partial def parsePostfixM : ParserM Expr := do
     pure withPost
 
 private partial def parseUnaryM : ParserM Expr := do
+  let t0 <- peekN 0
+  let t1 <- peekN 1
+  let t2 <- peekN 2
+  match t0.kind, t1.kind, t2.kind with
+  | .kw "new", .punct ".", .ident "target"
+  | .kw "new", .punct ".", .kw "target" =>
+    let _ <- bump
+    let _ <- bump
+    let _ <- bump
+    return .newTarget
+  | _, _, _ => pure ()
   if (← consumePunct? "++") then
     return .unary .preInc (← parseUnaryM)
   if (← consumePunct? "--") then
@@ -1207,10 +1236,16 @@ private partial def parseStmt : ParserM Stmt := do
     parseSemiOpt
     pure (.varDecl .const_ decls)
   | .kw "import" =>
-    let _ <- bump
-    let importStmt <- parseImportDeclStmt
-    parseSemiOpt
-    pure importStmt
+    let t1 <- peekN 1
+    if tokenIsPunct t1 "(" || tokenIsPunct t1 "." then
+      let e <- parseExprM
+      parseSemiOpt
+      pure (.expr e)
+    else
+      let _ <- bump
+      let importStmt <- parseImportDeclStmt
+      parseSemiOpt
+      pure importStmt
   | .kw "export" =>
     let _ <- bump
     if (← consumeKeyword? "default") then
