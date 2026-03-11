@@ -1,5 +1,5 @@
 """
-VerifiedJS Multi-Agent Choreography for Verified Compiler Development.
+VerifiedJS Multi-Agent choreography for Verified Compiler Development.
 
 A choreographic multi-agent system that automatically implements a formally
 verified JavaScript-to-WebAssembly compiler in Lean 4. Uses effectful's
@@ -43,12 +43,15 @@ import urllib.request
 from pathlib import Path
 from typing import Literal, TypedDict
 
+from tenacity import stop_after_attempt, wait_exponential
+
 from effectful.handlers.llm import Template, Tool
 from effectful.handlers.llm.completions import LiteLLMProvider, RetryLLMHandler
 from effectful.handlers.llm.multi import (
     Choreography,
     ChoreographyError,
     PersistentTaskQueue,
+    fan_out,
     scatter,
 )
 from effectful.handlers.llm.persistence import (
@@ -1618,32 +1621,26 @@ def verified_compiler_development_loop(
             elif task["task_type"] in ("prove", "review"):
                 proof_tasks.append(bundle)
 
-        spec_results: list[SpecResult] = []
+        groups = []
+        group_keys: list[str] = []
         if spec_tasks:
             log.info(f"  Dispatching {len(spec_tasks)} spec/impl tasks")
-            spec_results = scatter(
-                spec_tasks,
-                spec_writer,
-                lambda w, b: w.write_spec(json.dumps(b, indent=2)),
-            )
-
-        test_results: list[TestResult] = []
+            groups.append((spec_tasks, spec_writer, lambda w, b: w.write_spec(json.dumps(b, indent=2))))
+            group_keys.append("spec")
         if test_tasks:
             log.info(f"  Dispatching {len(test_tasks)} test tasks")
-            test_results = scatter(
-                test_tasks,
-                tester,
-                lambda t, b: t.write_tests_and_validate(json.dumps(b, indent=2)),
-            )
-
-        proof_results: list[ProofResult] = []
+            groups.append((test_tasks, tester, lambda t, b: t.write_tests_and_validate(json.dumps(b, indent=2))))
+            group_keys.append("test")
         if proof_tasks:
             log.info(f"  Dispatching {len(proof_tasks)} proof tasks")
-            proof_results = scatter(
-                proof_tasks,
-                prover,
-                lambda p, b: p.prove_theorem(json.dumps(b, indent=2)),
-            )
+            groups.append((proof_tasks, prover, lambda p, b: p.prove_theorem(json.dumps(b, indent=2))))
+            group_keys.append("proof")
+
+        fan_out_results = fan_out(groups) if groups else []
+        result_map = dict(zip(group_keys, fan_out_results))
+        spec_results: list[SpecResult] = result_map.get("spec", [])
+        test_results: list[TestResult] = result_map.get("test", [])
+        proof_results: list[ProofResult] = result_map.get("proof", [])
 
         # ── Phase 3.5: Adversarial phase (parallel) ───────────────
 
@@ -1729,6 +1726,7 @@ def verified_compiler_development_loop(
         # One revision round
         if needs_revision:
             log.info(f"  Revising {len(needs_revision)} items")
+            rev_spec, rev_test, rev_proof = [], [], []
             for kind, task, result, review in needs_revision:
                 rev_payload = json.dumps(
                     {
@@ -1742,23 +1740,21 @@ def verified_compiler_development_loop(
                     default=str,
                 )
                 if kind == "spec":
-                    scatter(
-                        [rev_payload],
-                        spec_writer,
-                        lambda w, r: w.write_spec(r),
-                    )
+                    rev_spec.append(rev_payload)
                 elif kind == "test":
-                    scatter(
-                        [rev_payload],
-                        tester,
-                        lambda t, r: t.write_tests_and_validate(r),
-                    )
+                    rev_test.append(rev_payload)
                 elif kind == "proof":
-                    scatter(
-                        [rev_payload],
-                        prover,
-                        lambda p, r: p.prove_theorem(r),
-                    )
+                    rev_proof.append(rev_payload)
+
+            rev_groups = []
+            if rev_spec:
+                rev_groups.append((rev_spec, spec_writer, lambda w, r: w.write_spec(r)))
+            if rev_test:
+                rev_groups.append((rev_test, tester, lambda t, r: t.write_tests_and_validate(r)))
+            if rev_proof:
+                rev_groups.append((rev_proof, prover, lambda p, r: p.prove_theorem(r)))
+            if rev_groups:
+                fan_out(rev_groups)
 
         # ── Phase 5: Memory Persistence ────────────────────────────
 
@@ -1865,12 +1861,15 @@ def main() -> None:
     choreo = Choreography(
         verified_compiler_development_loop,
         agents=all_agents,
-        queue=PersistentTaskQueue(STATE_DIR / "choreo_queue"),
+        queue=PersistentTaskQueue(STATE_DIR / "state.db"),
         handlers=[
             LiteLLMProvider(model=MODEL),
-            RetryLLMHandler(),
+            RetryLLMHandler(
+                stop=stop_after_attempt(5),
+                wait=wait_exponential(multiplier=1, min=2, max=30),
+            ),
             CompactionHandler(max_history_len=MAX_HISTORY_LEN),
-            PersistenceHandler(STATE_DIR / "persistence"),
+            PersistenceHandler(STATE_DIR / "state.db"),
         ],
     )
 
@@ -1884,14 +1883,14 @@ def main() -> None:
     try:
         result = choreo.run(
             planner=planner,
-            context_builder=[context_builder],
+            context_builder=context_builder,
             spec_writer=[spec_writer_1, spec_writer_2],
-            tester=[tester],
+            tester=tester,
             prover=[prover_1, prover_2],
             memory=memory_keeper,
-            spec_challenger=[spec_challenger],
-            fuzzer=[fuzzer],
-            soundness_auditor=[soundness_auditor],
+            spec_challenger=spec_challenger,
+            fuzzer=fuzzer,
+            soundness_auditor=soundness_auditor,
         )
     except ChoreographyError as e:
         log.error(f"Choreography failed: {e}")

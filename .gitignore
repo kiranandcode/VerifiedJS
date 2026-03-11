@@ -35,6 +35,8 @@ SORRY_REPORT.md
 current_tasks/*.txt
 
 .agent_locks/
+.agent_state/
 monitoring/frontend/dist/
+monitoring/frontend/node_modules/
 .worktrees/
 .claude/worktrees/
